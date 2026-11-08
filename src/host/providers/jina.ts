@@ -1,0 +1,189 @@
+/**
+ * dsh-web-tools — Jina provider adapter.
+ *
+ * Search: GET https://s.jina.ai/{query}?count=N (Authorization: Bearer,
+ *   Accept: application/json) — Jina's official search endpoint returns a
+ *   JSON envelope `{ code, status, data: [{ title, url, description,
+ *   publishedTime, ... }] }`; we normalize `data[]` into sources and never
+ *   hand-parse text.
+ * Balance (best effort): GET https://r.jina.ai/ with the Bearer token returns
+ *   a text page containing a "Balance left" line with the remaining tokens.
+ *   This is a stable-but-unofficial contract — never authoritative, and a
+ *   parse failure must degrade to "quota unavailable", never break search.
+ * @module
+ */
+import { providerError, throwIfHttp, resolveContext, type ProviderAdapter, type Source } from "./types.ts";
+import type { QuotaSnapshot } from "../quota.ts";
+import { fetchWithProxy } from "../fetch-proxy.ts";
+import { endpointViewOf } from "../endpoints.ts";
+import type { JinaProviderOptions } from "../../shared/provider-options.ts";
+
+/** Official fallbacks. Search is overridable; the Reader is a different host
+ *  (`r.jina.ai`) and stays pinned. */
+const JINA_SEARCH_URL = "https://s.jina.ai/";
+const JINA_READER_URL = "https://r.jina.ai/";
+
+/** Jina search caps `count` at 20 (per its API docs). */
+const JINA_MAX_RESULTS = 20;
+
+export const JINA_META = {
+  name: "jina",
+  label: "Jina",
+  description: "Reader + search (token based)",
+  credSuffix: "JINA",
+  fetchCapable: true,
+  needsBaseUrl: false,
+} as const;
+
+/**
+ * Build Reader request headers from user-configured options.
+ * Pure function (no side effects) for testability.
+ * - X-Engine: auto | curl | browser (NOT direct — deprecated upstream).
+ * - X-Cache-Tolerance: seconds; 0 = force fresh.
+ * - X-Max-Tokens: trim output guard.
+ * - X-Token-Budget: hard budget guard (rejects on overage).
+ * - X-Respond-With: readerlm-v2 for higher-quality HTML→Markdown conversion.
+ */
+export function buildJinaReaderHeaders(token: string, options?: Readonly<JinaProviderOptions>): Record<string, string> {
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${token}`,
+    accept: "text/plain",
+  };
+
+  if (options?.fetchEngine && options.fetchEngine !== "auto") {
+    headers["x-engine"] = options.fetchEngine;
+  }
+
+  if (typeof options?.fetchCacheToleranceSec === "number") {
+    headers["x-cache-tolerance"] = String(options.fetchCacheToleranceSec);
+  }
+
+  if (typeof options?.fetchMaxTokens === "number") {
+    headers["x-max-tokens"] = String(options.fetchMaxTokens);
+  }
+
+  if (typeof options?.fetchTokenBudget === "number") {
+    headers["x-token-budget"] = String(options.fetchTokenBudget);
+  }
+
+  if (options?.fetchReaderLmV2 === true) {
+    headers["x-respond-with"] = "readerlm-v2";
+  }
+
+  return headers;
+}
+
+export const JinaProvider: ProviderAdapter = {
+  ...JINA_META,
+
+  async search(query, maxResults, apiKey, baseUrl, contextOrSignal) {
+    const { signal, hints } = resolveContext(contextOrSignal);
+    const token = (apiKey ?? "").trim();
+    if (!token) throw providerError("config", "Jina API key is not configured");
+    const count = Math.min(Math.max(maxResults ?? 5, 1), JINA_MAX_RESULTS);
+    const cleanQ = hints?.cleanQuery ? hints.cleanQuery : query;
+    // Jina's search endpoint takes the query as a PATH segment, not a query
+    // parameter: `{base}/{encodedQuery}?count=N`.
+    const searchEndpoint = endpointViewOf("jina", { jina: baseUrl })?.url ?? JINA_SEARCH_URL;
+    const asPath = searchEndpoint.endsWith("/") ? searchEndpoint : `${searchEndpoint}/`;
+    const url = `${asPath}${encodeURIComponent(cleanQ)}?count=${count}`;
+    const res = await fetchWithProxy(url, {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+      signal,
+    }, { provider: "jina" });
+    throwIfHttp("Jina", res);
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      throw providerError("invalid-response", "Jina returned a non-JSON search response");
+    }
+    return { sources: parseJinaSearchJson(body, count) };
+  },
+
+  async fetch(url, apiKey, _baseUrl, contextOrSignal) {
+    const { signal, options } = resolveContext<JinaProviderOptions>(contextOrSignal);
+    const token = (apiKey ?? "").trim();
+    if (!token) throw providerError("config", "Jina API key is not configured");
+    const res = await fetchWithProxy(`${JINA_READER_URL}${encodeURIComponent(url)}`, {
+      method: "GET",
+      headers: buildJinaReaderHeaders(token, options),
+      signal,
+    }, { provider: "jina" });
+    throwIfHttp("Jina", res);
+    const text = await res.text();
+    if (!text.trim()) throw providerError("invalid-response", `Jina Reader returned empty content for ${url}`);
+    return { text };
+  },
+};
+
+/**
+ * Parse Jina's official JSON search envelope into normalized sources.
+ * The envelope is `{ code, status, data: [...] }`; each data item carries at
+ * least `url` (required), plus optional `title` / `description` /
+ * `publishedTime`. Items without a usable `url` are skipped; the result is
+ * capped at `maxResults`.
+ */
+export function parseJinaSearchJson(body: unknown, maxResults: number): Source[] {
+  const data = (body as { data?: unknown } | null)?.data;
+  if (!Array.isArray(data)) return [];
+  const sources: Source[] = [];
+  for (const item of data) {
+    if (sources.length >= maxResults) break;
+    if (!item || typeof item !== "object") continue;
+    const { url, title, description, publishedTime } = item as {
+      url?: unknown;
+      title?: unknown;
+      description?: unknown;
+      publishedTime?: unknown;
+    };
+    if (typeof url !== "string" || url.length === 0) continue;
+    sources.push({
+      url,
+      ...(typeof title === "string" && title ? { title } : {}),
+      ...(typeof description === "string" && description ? { snippet: description } : {}),
+      ...(typeof publishedTime === "string" && publishedTime ? { publishedAt: publishedTime } : {}),
+    });
+  }
+  return sources;
+}
+
+/**
+ * Parse the "Balance left" line from Jina Reader output (best effort).
+ * Defensive: any format change → undefined → quota shows unavailable.
+ */
+export function parseJinaBalance(text: string): number | undefined {
+  const line = text.split(/\r?\n/).find((x) => /balance\s+left/i.test(x));
+  if (!line) return undefined;
+  const value = line.match(/([\d,.]+)/)?.[1];
+  if (!value) return undefined;
+  const n = Number(value.replace(/,/g, ""));
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** Best-effort Jina quota (never authoritative). */
+export async function jinaQuota(apiKey: string, signal?: AbortSignal): Promise<QuotaSnapshot> {
+  if (!apiKey) throw providerError("config", "Jina API key is not configured");
+  const res = await fetchWithProxy(JINA_READER_URL, {
+    headers: { authorization: `Bearer ${apiKey}` },
+    signal,
+  }, { provider: "jina" });
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) throw providerError("auth", `Jina balance auth failed (HTTP ${res.status})`, res.status);
+    if (res.status === 429) throw providerError("rate-limit", "Jina rate limit exceeded (HTTP 429)", res.status);
+    throw providerError("server", `Jina balance failed (HTTP ${res.status})`, res.status);
+  }
+  const text = await res.text();
+  const balance = parseJinaBalance(text);
+  return {
+    supported: true,
+    authoritative: false,
+    unit: "tokens",
+    ...(balance !== undefined ? { remaining: balance } : {}),
+    source: "best_effort_api",
+    fetchedAt: Date.now(),
+    note: "Best-effort balance from Jina Reader; not an official billing API",
+  };
+}
+
