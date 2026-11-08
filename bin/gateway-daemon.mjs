@@ -41,15 +41,23 @@ function readGatewayJson() {
   }
 }
 
-async function checkGatewayHealth(host = DEFAULT_HOST, port = DEFAULT_PORT, timeoutMs = 1500) {
-  const url = `http://${host}:${port}/web-tools/api/version/check`;
+async function checkGatewayHealth(host = DEFAULT_HOST, port = DEFAULT_PORT, timeoutMs = 1500, internalPort) {
+  const internalUrl = Number.isInteger(internalPort) && internalPort > 0
+    ? `http://127.0.0.1:${internalPort}`
+    : undefined;
+  const publicUrl = `http://${host}:${port}`;
+  const url = `${internalUrl || publicUrl}/web-tools/api/version/check`;
+  const headers = { "content-type": "application/json" };
+  if (!internalUrl && process.env.KIMI_WEB_TOOLS_PASSWORD) {
+    headers.authorization = `Bearer ${process.env.KIMI_WEB_TOOLS_PASSWORD}`;
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   timer.unref?.();
   try {
     const res = await fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers,
       body: "{}",
       signal: controller.signal,
     });
@@ -60,7 +68,8 @@ async function checkGatewayHealth(host = DEFAULT_HOST, port = DEFAULT_PORT, time
         healthy: true,
         host,
         port,
-        url: `http://${host}:${port}`,
+        url: publicUrl,
+        ...(internalUrl ? { internalUrl } : {}),
         version: json.value.currentVersion,
       };
     }
@@ -82,7 +91,11 @@ async function loadGatewayModule() {
 }
 
 async function runForeground(host = DEFAULT_HOST, port = DEFAULT_PORT) {
-  const existing = await checkGatewayHealth(host, port);
+  const saved = readGatewayJson();
+  const hasLocalListener = saved?.host === host && saved?.port === port && Number.isInteger(saved?.internalPort);
+  const existing = hasLocalListener
+    ? await checkGatewayHealth(host, port, 1500, saved.internalPort)
+    : null;
   if (existing) {
     console.log(JSON.stringify({ status: "already-running", ...existing }));
     return;
@@ -119,10 +132,19 @@ export async function ensureGatewayDaemon(host = DEFAULT_HOST, port = DEFAULT_PO
   const saved = readGatewayJson();
   const checkHost = saved?.host || host;
   const checkPort = saved?.port || port;
+  const internalPort = Number.isInteger(saved?.internalPort) ? saved.internalPort : undefined;
 
-  const health = await checkGatewayHealth(checkHost, checkPort);
+  const health = internalPort
+    ? await checkGatewayHealth(checkHost, checkPort, 1500, internalPort)
+    : null;
   if (health) {
-    return { status: "running", pid: saved?.pid, ...health };
+    return {
+      status: "running",
+      pid: saved?.pid,
+      ...health,
+      publicUrl: health.url,
+      url: health.internalUrl,
+    };
   }
 
   const dataDir = getWebToolsDir();
@@ -153,10 +175,17 @@ export async function ensureGatewayDaemon(host = DEFAULT_HOST, port = DEFAULT_PO
   const deadline = Date.now() + 8000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 150));
-    const ready = await checkGatewayHealth(host, port);
+    const updated = readGatewayJson();
+    if (!Number.isInteger(updated?.internalPort)) continue;
+    const ready = await checkGatewayHealth(host, port, 1500, updated.internalPort);
     if (ready) {
-      const updated = readGatewayJson();
-      return { status: "spawned", pid: updated?.pid ?? child.pid, ...ready };
+      return {
+        status: "spawned",
+        pid: updated?.pid ?? child.pid,
+        ...ready,
+        publicUrl: ready.url,
+        url: ready.internalUrl,
+      };
     }
   }
 
@@ -185,7 +214,7 @@ async function main() {
 
   if (cmd === "status" || cmd === "--status") {
     const saved = readGatewayJson();
-    const health = await checkGatewayHealth(saved?.host || DEFAULT_HOST, saved?.port || DEFAULT_PORT);
+    const health = await checkGatewayHealth(saved?.host || DEFAULT_HOST, saved?.port || DEFAULT_PORT, 1500, saved?.internalPort);
     console.log(
       JSON.stringify(
         {

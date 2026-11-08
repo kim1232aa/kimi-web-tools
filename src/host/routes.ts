@@ -211,12 +211,12 @@ async function readJsonBody(req: WebToolsHttpRequest): Promise<unknown> {
 }
 
 /**
- * Configuration-plane fence: LOOPBACK PEER ONLY + same-origin.
+ * Configuration-plane fence: LOOPBACK PEER OR bearer-authenticated gateway + same-origin.
  *
  * Unlike the general /api gateway, these routes mutate settings and
  * credentials — DSH treats that plane as privileged and `trustedHosts` is NOT
- * authentication. A LAN host reaching this DSH instance must NOT be able to
- * read or write provider config/keys.
+ * authentication. A LAN host reaching this DSH instance must not be able to
+ * read or write provider config/keys without gateway authentication.
  *
  * ## Why the Host header alone is not enough
  *
@@ -226,16 +226,15 @@ async function readJsonBody(req: WebToolsHttpRequest): Promise<unknown> {
  * Sec-Fetch-Site checks — they are browser-asserted, so a non-browser client
  * simply omits them.
  *
- * The real defense is the TCP peer. DSH's webserver passes the raw Node
- * request to route handlers, so `req.socket.remoteAddress` is the actual
- * connection peer and cannot be forged. It is the PRIMARY check here; the
+ * Local callers are trusted by the TCP peer. DSH's webserver passes the raw
+ * Node request to route handlers, so `req.socket.remoteAddress` cannot be
+ * forged. The public gateway instead verifies its bearer password before it
+ * marks the request in-process; forwarded headers never establish trust.
  * Host/Origin checks remain as defense in depth against DNS rebinding of a
  * genuine local browser.
  *
  * Note deliberately NOT trusted: `X-Forwarded-For`. A reverse proxy terminates
  * the TCP connection, so a spoofable header must never decide authorization.
- * The correct fix for a proxied deployment is the gateway's own authentication,
- * not a header this plugin cannot verify.
  */
 
 /** Parse the Host header as an authority; returns hostname (lowercased) or "". */
@@ -277,15 +276,22 @@ export function peerAddressOf(req: WebToolsHttpRequest): string | undefined {
   return typeof address === "string" && address.length > 0 ? address : undefined;
 }
 
+const gatewayAuthenticatedRequests = new WeakSet<object>();
+
+export function markGatewayRequestAuthenticated(req: WebToolsHttpRequest): void {
+  gatewayAuthenticatedRequests.add(req);
+}
+
 /**
  * Whether this request may touch the configuration plane.
  *
- * @returns `"peer"` when the TCP peer is loopback (strongest), `"host"` when no
- *          peer address is exposed and the Host header is loopback (weaker,
- *          kept so in-process harnesses and tests still work), or `false`.
+ * @returns `"peer"` for a loopback peer or gateway-verified bearer request,
+ *          `"host"` when no peer address is exposed and Host is loopback (tests),
+ *          or `false`.
  */
 export function configPlaneTrust(req: WebToolsHttpRequest): "peer" | "host" | false {
   if (!isSameOrigin(req) || !isNotCrossSite(req)) return false;
+  if (gatewayAuthenticatedRequests.has(req)) return "peer";
   const peer = peerAddressOf(req);
   if (peer !== undefined) return isLoopbackAddress(peer) ? "peer" : false;
   // In production DSH environments, every real connection carries req.socket.

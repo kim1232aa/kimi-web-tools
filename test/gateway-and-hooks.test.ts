@@ -24,26 +24,26 @@ test("Standalone Gateway Server serves UI, management APIs, and MCP endpoints", 
 
   try {
     // 1. Static UI: GET / and GET /app.js
-    const htmlRes = await fetch(`${handle.url}/`);
+    const htmlRes = await fetch(`${handle.internalUrl}/`);
     assert.equal(htmlRes.status, 200);
     const html = await htmlRes.text();
     assert.ok(html.includes("--dsw-alias-label-primary"), "index.html must include --dsw-alias-* CSS variables");
     assert.ok(html.includes('<script type="module" src="/app.js"></script>'));
 
-    const jsRes = await fetch(`${handle.url}/app.js`);
+    const jsRes = await fetch(`${handle.internalUrl}/app.js`);
     assert.equal(jsRes.status, 200);
     const jsText = await jsRes.text();
     assert.ok(jsText.includes("Kimi Web Tools"), "app.js must include StandaloneApp bundle");
 
     // 2. Version check via both GET and POST
-    const verGet = await fetch(`${handle.url}/web-tools/api/version/check`);
+    const verGet = await fetch(`${handle.internalUrl}/web-tools/api/version/check`);
     assert.equal(verGet.status, 200);
     const verJson = (await verGet.json()) as any;
     assert.equal(verJson.ok, true);
     assert.equal(verJson.value.currentVersion, "0.4.0");
 
     // 3. Config get & save
-    const cfgRes = await fetch(`${handle.url}/web-tools/api/config/get`, {
+    const cfgRes = await fetch(`${handle.internalUrl}/web-tools/api/config/get`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: "{}",
@@ -54,7 +54,7 @@ test("Standalone Gateway Server serves UI, management APIs, and MCP endpoints", 
     assert.ok(Array.isArray(cfgJson.value.providers));
 
     // 4. Search mode via management API and MCP endpoint
-    const modeSet = await fetch(`${handle.url}/web-tools/api/search-mode/set`, {
+    const modeSet = await fetch(`${handle.internalUrl}/web-tools/api/search-mode/set`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ sessionId: "global", mode: "required" }),
@@ -63,7 +63,7 @@ test("Standalone Gateway Server serves UI, management APIs, and MCP endpoints", 
     const modeSetJson = (await modeSet.json()) as any;
     assert.equal(modeSetJson.value.mode, "required");
 
-    const mcpMode = await fetch(`${handle.url}/web-tools/mcp/mode`, {
+    const mcpMode = await fetch(`${handle.internalUrl}/web-tools/mcp/mode`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "get", sessionId: "sess-100" }),
@@ -73,7 +73,7 @@ test("Standalone Gateway Server serves UI, management APIs, and MCP endpoints", 
     assert.equal(mcpModeJson.value.mode, "required", "session inherits global mode when not overridden");
 
     // 5. MCP status endpoint
-    const mcpStatus = await fetch(`${handle.url}/web-tools/mcp/status`, {
+    const mcpStatus = await fetch(`${handle.internalUrl}/web-tools/mcp/status`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ sessionId: "sess-100" }),

@@ -5,7 +5,7 @@
  *  - `config.json`: non-secret WebToolsSettings
  *  - `credentials.json`: provider API keys and custom source credentials (0600 permissions)
  *  - `mode-state.json`: global & per-session search mode + active turn research tracking
- *  - `gateway.json`: active gateway daemon discovery metadata (pid, host, port, url)
+ *  - `gateway.json`: active gateway daemon discovery metadata (public and loopback listener ports)
  * @module
  */
 import fs from "node:fs";
@@ -33,6 +33,7 @@ export interface GatewayStateDocument {
   pid: number;
   host: string;
   port: number;
+  internalPort?: number;
   url: string;
   version: string;
   startedAt: number;
@@ -285,6 +286,7 @@ export class LocalStorage {
           pid: parsed.pid,
           host: parsed.host,
           port: parsed.port,
+          ...(typeof parsed.internalPort === "number" ? { internalPort: parsed.internalPort } : {}),
           url: parsed.url,
           version: typeof parsed.version === "string" ? parsed.version : "0.4.0",
           startedAt: typeof parsed.startedAt === "number" ? parsed.startedAt : Date.now(),

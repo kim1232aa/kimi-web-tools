@@ -7,16 +7,18 @@
  *    via `apply(ctx)` from `src/host/index.ts`.
  *  - Mounts internal MCP execution endpoints (`POST /web-tools/mcp/search`,
  *    `fetch`, `status`, `mode`).
- *  - Enforces loopback peer security (`configPlaneTrust`) across all endpoints.
+ *  - Requires a bearer password on the public listener and keeps a separate loopback-only listener for local calls.
+ *  - Enforces same-origin and loopback peer security for configuration APIs.
  *  - Persists state in `$KIMI_CODE_HOME/web-tools/` via `LocalStorage`.
  * @module
  */
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import { timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { apply } from "./index.ts";
-import { configPlaneTrust, API_PREFIX } from "./routes.ts";
+import { configPlaneTrust, markGatewayRequestAuthenticated, API_PREFIX } from "./routes.ts";
 import { LocalStorage } from "./local-storage.ts";
 import { CURRENT_VERSION } from "../shared/version.ts";
 import { nextSearchMode, type SearchMode } from "../shared/api-types.ts";
@@ -48,6 +50,8 @@ export interface GatewayServerHandle {
   readonly host: string;
   readonly port: number;
   readonly url: string;
+  readonly internalPort: number;
+  readonly internalUrl: string;
   readonly storage: LocalStorage;
   readonly server: http.Server;
   close(): Promise<void>;
@@ -60,12 +64,42 @@ function resolveProjectRoot(explicit?: string): string {
   return path.resolve(here, "..", "..");
 }
 
-function writeJson(res: http.ServerResponse, status: number, body: unknown): void {
+function writeJson(res: http.ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
+    ...headers,
   });
   res.end(JSON.stringify(body));
+}
+
+function hasValidBearer(req: http.IncomingMessage, password: string): boolean {
+  const authorization = req.headers.authorization;
+  if (typeof authorization !== "string" || authorization.slice(0, 7).toLowerCase() !== "bearer ") return false;
+  const provided = Buffer.from(authorization.slice(7), "utf8");
+  const expected = Buffer.from(password, "utf8");
+  return provided.length === expected.length && timingSafeEqual(provided, expected);
+}
+
+async function listenOn(server: http.Server, port: number, host: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const onError = (err: Error) => {
+      server.removeListener("listening", onListening);
+      reject(err);
+    };
+    const onListening = () => {
+      server.removeListener("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, host);
+  });
+}
+
+async function closeServer(server: http.Server): Promise<void> {
+  if (!server.listening) return;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
 async function readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
@@ -237,9 +271,30 @@ export async function startGatewayServer(options: GatewayServerOptions = {}): Pr
     return parsed?.value;
   }
 
-  const server = http.createServer(async (req, res) => {
+  const password = process.env.KIMI_WEB_TOOLS_PASSWORD;
+  const requestHandler = (internal: boolean) => async (req: http.IncomingMessage, res: http.ServerResponse) => {
     try {
-      // Enforce loopback peer security across all endpoints
+      if (!internal) {
+        if (!password) {
+          writeJson(res, 503, {
+            ok: false,
+            error: { code: "auth-not-configured", message: "Set KIMI_WEB_TOOLS_PASSWORD to enable public gateway access" },
+          });
+          return;
+        }
+        if (!hasValidBearer(req, password)) {
+          writeJson(
+            res,
+            401,
+            { ok: false, error: { code: "unauthorized", message: "A valid bearer password is required" } },
+            { "www-authenticate": "Bearer" },
+          );
+          return;
+        }
+        markGatewayRequestAuthenticated(req as unknown as WebToolsHttpRequest);
+      }
+
+      // Keep configuration routes fenced for local calls and same-origin browsers.
       if (configPlaneTrust(req as unknown as WebToolsHttpRequest) === false) {
         writeJson(res, 403, { ok: false, error: { code: "forbidden", message: "Loopback access only" } });
         return;
@@ -608,24 +663,35 @@ export async function startGatewayServer(options: GatewayServerOptions = {}): Pr
         error: { code: "internal", message: err instanceof Error ? err.message : String(err) },
       });
     }
-  });
+  };
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(requestedPort, host, () => {
-      server.removeListener("error", reject);
-      resolve();
-    });
-  });
+  const server = http.createServer(requestHandler(false));
+  const internalServer = http.createServer(requestHandler(true));
+  try {
+    await listenOn(internalServer, 0, "127.0.0.1");
+    await listenOn(server, requestedPort, host);
+  } catch (err) {
+    await Promise.all([closeServer(server), closeServer(internalServer)]);
+    for (const dispose of disposers.splice(0)) {
+      try {
+        dispose();
+      } catch {}
+    }
+    throw err;
+  }
 
   const addr = server.address();
   const actualPort = typeof addr === "object" && addr ? addr.port : requestedPort;
+  const internalAddr = internalServer.address();
+  const internalPort = typeof internalAddr === "object" && internalAddr ? internalAddr.port : 0;
   const url = `http://${host}:${actualPort}`;
+  const internalUrl = `http://127.0.0.1:${internalPort}`;
 
   storage.writeGatewayState({
     pid: process.pid,
     host,
     port: actualPort,
+    internalPort,
     url,
     version: CURRENT_VERSION,
     startedAt: Date.now(),
@@ -635,6 +701,8 @@ export async function startGatewayServer(options: GatewayServerOptions = {}): Pr
     host,
     port: actualPort,
     url,
+    internalPort,
+    internalUrl,
     storage,
     server,
     async close() {
@@ -644,9 +712,7 @@ export async function startGatewayServer(options: GatewayServerOptions = {}): Pr
           dispose();
         } catch {}
       }
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await Promise.all([closeServer(server), closeServer(internalServer)]);
     },
   };
 }
