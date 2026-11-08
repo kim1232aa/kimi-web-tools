@@ -223,3 +223,31 @@ test("Stdio MCP Server initializes, lists tools, searches, fetches, and exposes 
     }
   });
 });
+
+
+test("Stdio MCP Server omits web_fetch when fetch is disabled", async () => {
+  const child = spawn(process.execPath, [path.join(ROOT, "bin", "mcp-server.mjs")], {
+    cwd: ROOT,
+    env: { ...process.env, KIMI_WEB_TOOLS_ENABLE_FETCH: "false" },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let response;
+  let buffer = "";
+  child.stdout.on("data", (chunk) => {
+    buffer += chunk.toString("utf8");
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.trim()) response = JSON.parse(line);
+    }
+  });
+
+  try {
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) + "\n");
+    const deadline = Date.now() + 3000;
+    while (!response && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(response?.result.tools.map((tool: any) => tool.name), ["web_search"]);
+  } finally {
+    child.kill();
+  }
+});
