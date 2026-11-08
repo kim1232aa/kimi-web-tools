@@ -41,13 +41,43 @@ function readGatewayJson() {
   }
 }
 
+function writeGatewayJson(handle) {
+  const directory = getWebToolsDir();
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const filePath = getGatewayJsonPath();
+  const state = {
+    pid: process.pid,
+    host: handle.host,
+    port: handle.port,
+    internalPort: handle.internalPort,
+    url: handle.url,
+    startedAt: Date.now(),
+  };
+  fs.writeFileSync(filePath, `${JSON.stringify(state, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  try {
+    fs.chmodSync(filePath, 0o600);
+  } catch {}
+}
+
+function clearGatewayJson(onlyPid) {
+  const filePath = getGatewayJsonPath();
+  if (!fs.existsSync(filePath)) return;
+  if (onlyPid !== undefined) {
+    const current = readGatewayJson();
+    if (current && current.pid !== onlyPid) return;
+  }
+  try {
+    fs.unlinkSync(filePath);
+  } catch {}
+}
+
 async function checkGatewayHealth(host = DEFAULT_HOST, port = DEFAULT_PORT, timeoutMs = 1500, internalPort) {
   const internalUrl = Number.isInteger(internalPort) && internalPort > 0
     ? `http://127.0.0.1:${internalPort}`
     : undefined;
   const publicUrl = `http://${host}:${port}`;
-  const url = `${internalUrl || publicUrl}/web-tools/api/version/check`;
-  const headers = { "content-type": "application/json" };
+  const url = `${internalUrl || publicUrl}/health`;
+  const headers = { accept: "application/json" };
   if (!internalUrl && process.env.KIMI_WEB_TOOLS_PASSWORD) {
     headers.authorization = `Bearer ${process.env.KIMI_WEB_TOOLS_PASSWORD}`;
   }
@@ -55,22 +85,17 @@ async function checkGatewayHealth(host = DEFAULT_HOST, port = DEFAULT_PORT, time
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   timer.unref?.();
   try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers,
-      body: "{}",
-      signal: controller.signal,
-    });
+    const res = await fetch(url, { headers, signal: controller.signal });
     if (!res.ok) return null;
     const json = await res.json();
-    if (json && json.ok && json.value) {
+    if (json?.ok === true && json.value?.status === "healthy") {
       return {
         healthy: true,
         host,
         port,
         url: publicUrl,
         ...(internalUrl ? { internalUrl } : {}),
-        version: json.value.currentVersion,
+        version: json.value.version,
       };
     }
     return null;
@@ -101,16 +126,19 @@ async function runForeground(host = DEFAULT_HOST, port = DEFAULT_PORT) {
     return;
   }
   const { startGatewayServer } = await loadGatewayModule();
-  const handle = await startGatewayServer({
-    host,
-    port,
-    projectRoot: PROJECT_ROOT,
-  });
+  const handle = await startGatewayServer({ host, port });
+  try {
+    writeGatewayJson(handle);
+  } catch (error) {
+    await handle.close().catch(() => {});
+    throw error;
+  }
 
   const shutdown = async () => {
     try {
       await handle.close();
     } catch {}
+    clearGatewayJson(process.pid);
     process.exit(0);
   };
 
@@ -199,12 +227,7 @@ async function stopGatewayDaemon() {
       process.kill(saved.pid, "SIGTERM");
     } catch {}
   }
-  const gwPath = getGatewayJsonPath();
-  if (fs.existsSync(gwPath)) {
-    try {
-      fs.unlinkSync(gwPath);
-    } catch {}
-  }
+  clearGatewayJson();
   return { status: "stopped", pid: saved?.pid ?? null };
 }
 

@@ -1,14 +1,14 @@
 {
   "name": "kimi-web-tools",
   "version": "0.4.0",
-  "description": "Multi-provider web search, web fetch, and social platform research plugin & standalone gateway for Kimi Code",
+  "description": "Minimal 9Router web search and optional fetch gateway for Kimi Code",
   "type": "module",
   "license": "MIT",
-  "main": "./lib/host/index.js",
+  "keywords": ["web-search", "web-fetch", "9router", "agy-search", "mcp"],
+  "main": "./lib/host/gateway-server.js",
   "exports": {
-    ".": "./lib/host/index.js",
-    "./gateway": "./lib/host/gateway-server.js",
-    "./storage": "./lib/host/local-storage.js"
+    ".": "./lib/host/gateway-server.js",
+    "./gateway": "./lib/host/gateway-server.js"
   },
   "bin": {
     "kimi-web-tools-gateway": "./bin/gateway-daemon.mjs",

@@ -1,18 +1,12 @@
 {
   "name": "kimi-web-tools",
   "version": "0.4.0",
-  "description": "Multi-provider web search and optional web fetch for Kimi Code",
+  "description": "Minimal 9Router web search and optional web fetch for Kimi Code",
   "keywords": [
     "web-search",
     "web-fetch",
-    "exa",
-    "tavily",
-    "brave",
-    "firecrawl",
-    "jina",
-    "searxng",
-    "xiaohongshu",
-    "x",
+    "9router",
+    "agy-search",
     "mcp"
   ],
   "license": "MIT",
@@ -28,7 +22,7 @@
   },
   "interface": {
     "displayName": "Kimi Web Tools",
-    "shortDescription": "Multi-provider web search and fetch gateway",
+    "shortDescription": "Minimal 9Router web search and optional fetch gateway",
     "developerName": "kimi-web-tools"
   }
 }
