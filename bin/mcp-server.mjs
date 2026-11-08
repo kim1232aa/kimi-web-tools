@@ -10,7 +10,7 @@ const FETCH_ENABLED = !["0", "false", "no", "off"].includes(
 
 const SEARCH_TOOL = {
   name: "web_search",
-  description: "Search the web through the configured 9Router agy-search provider.",
+  description: "Search the web through the configured 9Router provider.",
   inputSchema: {
     type: "object",
     properties: {
