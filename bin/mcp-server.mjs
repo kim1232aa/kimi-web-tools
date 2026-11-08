@@ -4,41 +4,13 @@
  *
  * Implements MCP protocol over stdin/stdout:
  *  - Auto-starts the standalone gateway daemon (`127.0.0.1:18492`) if not running.
- *  - Exposes 4 tools:
- *    1. `web_search` — Multi-provider web & social platform (Xiaohongshu / X) search
- *    2. `web_fetch`  — Full-page & social post/comment content extraction
- *    3. `web_mode`   — View or switch Search Mode (`auto`, `required`, `off`)
- *    4. `web_status` — Inspect gateway, providers, quotas, and platform login state
+ *  - Exposes `web_search` and `web_fetch` tools for the configured gateway.
  */
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import readline from "node:readline";
 import { ensureGatewayDaemon } from "./gateway-daemon.mjs";
 
 const VERSION = "0.4.0";
 const PROTOCOL_VERSION = "2025-06-18";
-
-function getWebToolsDir() {
-  const explicit = process.env.KIMI_CODE_HOME?.trim();
-  const home = explicit && explicit.length > 0 ? explicit : path.join(os.homedir(), ".kimi-code");
-  return path.join(home, "web-tools");
-}
-
-function getActiveSessionId(explicitSessionId) {
-  if (typeof explicitSessionId === "string" && explicitSessionId.trim().length > 0) {
-    return explicitSessionId.trim();
-  }
-  const modeStatePath = path.join(getWebToolsDir(), "mode-state.json");
-  if (!fs.existsSync(modeStatePath)) return "global";
-  try {
-    const doc = JSON.parse(fs.readFileSync(modeStatePath, "utf8"));
-    if (typeof doc.activeSessionId === "string" && doc.activeSessionId.trim()) {
-      return doc.activeSessionId.trim();
-    }
-  } catch {}
-  return "global";
-}
 
 const TOOLS = [
   {
@@ -82,48 +54,6 @@ const TOOLS = [
         },
       },
       required: ["url"],
-    },
-  },
-  {
-    name: "web_mode",
-    description:
-      "Get, set, or toggle the Web Search Mode (`auto` = 智能联网, `required` = 始终联网, `off` = 关闭联网) for the current session or globally.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        action: {
-          type: "string",
-          enum: ["get", "set", "toggle"],
-          description: "Operation to perform: `get` (default), `set`, or `toggle`.",
-        },
-        mode: {
-          type: "string",
-          enum: ["auto", "required", "off"],
-          description: "Target mode when action is `set` (`auto`, `required`, or `off`).",
-        },
-        session_id: {
-          type: "string",
-          description: "Target session ID, or `global` (default) to configure the global default mode.",
-        },
-      },
-    },
-  },
-  {
-    name: "web_status",
-    description:
-      "Inspect the Kimi Web Tools gateway status, dashboard URL, active search mode, provider routing chain, API key pools, and Xiaohongshu / X browser session status.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        include_quotas: {
-          type: "boolean",
-          description: "Whether to query live provider quota snapshots (default: false).",
-        },
-        session_id: {
-          type: "string",
-          description: "Optional session ID to check effective search mode for.",
-        },
-      },
     },
   },
 ];
@@ -187,64 +117,11 @@ function formatFetchOutput(value) {
   return `${header}\n\n${content}`;
 }
 
-function formatModeOutput(value) {
-  const modeNames = {
-    auto: "auto (智能联网 — model decides when to search)",
-    required: "required (始终联网 — at least one web_search or web_fetch required per turn)",
-    off: "off (关闭联网 — web tools disabled and blocked)",
-  };
-  return [
-    `Session: ${value?.sessionId ?? "global"}`,
-    `Effective Mode: ${modeNames[value?.mode] || value?.mode}`,
-    `Global Default Mode: ${modeNames[value?.globalMode] || value?.globalMode}`,
-    `Search Provider Available: ${value?.available ? "yes" : "no"}`,
-  ].join("\n");
-}
-
-function formatStatusOutput(value) {
-  const lines = [];
-  lines.push(`# Kimi Web Tools Status (v${value?.version ?? VERSION})`);
-  if (value?.gateway) {
-    lines.push(`- Dashboard & Gateway URL: ${value.gateway.url} (PID: ${value.gateway.pid})`);
-  }
-  if (value?.mode) {
-    lines.push(
-      `- Search Mode: ${value.mode.mode} (global: ${value.mode.globalMode}, provider available: ${value.mode.available})`,
-    );
-  }
-  if (value?.config) {
-    const chain = [value.config.defaultProvider, ...(value.config.fallbackOrder || [])].filter(Boolean);
-    lines.push(`- Routing Policy: ${value.config.searchRoutingPolicy || "ordered"}`);
-    lines.push(`- Active Chain: ${chain.join(" -> ") || "none"}`);
-    lines.push(`- Attempt Timeout: ${value.config.providerAttemptTimeoutMs}ms`);
-  }
-  if (Array.isArray(value?.providers)) {
-    lines.push(`\n## Providers (${value.providers.length})`);
-    for (const p of value.providers) {
-      const state = !p.enabled
-        ? "disabled"
-        : p.keyConfigured || p.name === "searxng"
-          ? `ready (keys: ${p.poolSize ?? 0})`
-          : "not configured";
-      lines.push(`- ${p.label} (\`${p.name}\`${p.custom ? ", custom" : ""}): ${state}`);
-    }
-  }
-  if (value?.platforms && typeof value.platforms === "object") {
-    lines.push(`\n## Social Platforms`);
-    for (const [id, plat] of Object.entries(value.platforms)) {
-      if (!plat || typeof plat !== "object") continue;
-      lines.push(
-        `- ${plat.name || id} (\`${id}\`): enabled=${plat.enabled}, authenticated=${plat.authenticated}, state=${plat.runtimeState}`,
-      );
-    }
-  }
-  return lines.join("\n");
-}
-
 async function runTool(params) {
   const name = params?.name;
   const args = params?.arguments ?? {};
-  const sessionId = getActiveSessionId(args.session_id ?? args.sessionId);
+  const rawSessionId = args.session_id ?? args.sessionId;
+  const sessionId = typeof rawSessionId === "string" && rawSessionId.trim() ? rawSessionId.trim() : "global";
 
   try {
     if (name === "web_search") {
@@ -265,24 +142,6 @@ async function runTool(params) {
       if (!url) throw new Error("Missing required argument: url");
       const result = await callGatewayMcp("fetch", { url, sessionId });
       return { content: [{ type: "text", text: formatFetchOutput(result) }] };
-    }
-
-    if (name === "web_mode") {
-      const targetSession = args.session_id ?? args.sessionId ?? "global";
-      const action = args.action ?? (args.mode ? "set" : "get");
-      const result = await callGatewayMcp("mode", {
-        sessionId: targetSession,
-        action,
-        mode: args.mode,
-        updateGlobal: targetSession === "global",
-      });
-      return { content: [{ type: "text", text: formatModeOutput(result) }] };
-    }
-
-    if (name === "web_status") {
-      const includeQuotas = Boolean(args.include_quotas ?? args.includeQuotas);
-      const result = await callGatewayMcp("status", { sessionId, includeQuotas });
-      return { content: [{ type: "text", text: formatStatusOutput(result) }] };
     }
 
     return {

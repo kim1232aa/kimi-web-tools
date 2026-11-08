@@ -1,9 +1,9 @@
 /**
- * kimi-web-tools — End-to-End Integration Tests for Gateway Server, MCP Server, and Hooks.
+ * kimi-web-tools — End-to-End Integration Tests for Gateway Server and MCP Server.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -88,127 +88,7 @@ test("Standalone Gateway Server serves UI, management APIs, and MCP endpoints", 
   }
 });
 
-test("Kimi Code Hooks enforce off-mode gate and required-mode stop turn steer", () => {
-  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "kimi-wt-hooks-"));
-  const env = { ...process.env, KIMI_CODE_HOME: tmpHome };
-  const webToolsDir = path.join(tmpHome, "web-tools");
-  fs.mkdirSync(webToolsDir, { recursive: true });
-
-  try {
-    const modeStatePath = path.join(webToolsDir, "mode-state.json");
-
-    // Case 1: Mode = "off" -> PreToolUse blocks web_search with exit code 2
-    fs.writeFileSync(
-      modeStatePath,
-      JSON.stringify({ globalMode: "off", sessions: {}, updatedAt: Date.now() }),
-      "utf8",
-    );
-
-    const promptResOff = spawnSync(
-      process.execPath,
-      [path.join(ROOT, "hooks", "user-prompt-submit.mjs")],
-      {
-        input: JSON.stringify({ session_id: "s-off", prompt: "hello" }),
-        env,
-        encoding: "utf8",
-      },
-    );
-    assert.equal(promptResOff.status, 0);
-    assert.match(promptResOff.stdout, /Web search is switched OFF/);
-
-    const preToolOff = spawnSync(
-      process.execPath,
-      [path.join(ROOT, "hooks", "pre-tool-gate.mjs")],
-      {
-        input: JSON.stringify({ session_id: "s-off", tool_name: "mcp__web__web_search", tool_call_id: "c1" }),
-        env,
-        encoding: "utf8",
-      },
-    );
-    assert.equal(preToolOff.status, 2, "PreToolUse must exit 2 when mode is off");
-    assert.match(preToolOff.stderr, /Web search is switched OFF/);
-
-    // Case 2: Mode = "required" -> Stop steers once if no web tool called, then allows after web tool called
-    fs.writeFileSync(
-      modeStatePath,
-      JSON.stringify({ globalMode: "required", sessions: {}, updatedAt: Date.now() }),
-      "utf8",
-    );
-
-    const promptResReq = spawnSync(
-      process.execPath,
-      [path.join(ROOT, "hooks", "user-prompt-submit.mjs")],
-      {
-        input: JSON.stringify({ session_id: "s-req", prompt: "latest news" }),
-        env,
-        encoding: "utf8",
-      },
-    );
-    assert.equal(promptResReq.status, 0);
-    assert.match(promptResReq.stdout, /Web Search is required for this turn/);
-
-    // Stop before any web tool call -> exits 2 with correction steer
-    const stopBeforeResearch = spawnSync(
-      process.execPath,
-      [path.join(ROOT, "hooks", "stop-turn-gate.mjs")],
-      {
-        input: JSON.stringify({ session_id: "s-req", agent_id: "main" }),
-        env,
-        encoding: "utf8",
-      },
-    );
-    assert.equal(stopBeforeResearch.status, 2, "Stop hook must exit 2 when required research has not run");
-    assert.match(stopBeforeResearch.stderr, /Call web_search or web_fetch before finalizing/);
-
-    // Second Stop without research -> does not infinite-loop (correctionCount === 1)
-    const stopSecondTime = spawnSync(
-      process.execPath,
-      [path.join(ROOT, "hooks", "stop-turn-gate.mjs")],
-      {
-        input: JSON.stringify({ session_id: "s-req", agent_id: "main" }),
-        env,
-        encoding: "utf8",
-      },
-    );
-    assert.equal(stopSecondTime.status, 0, "Stop hook must not loop after one correction steer");
-
-    // New turn where PreToolUse records web_search -> Stop exits 0 immediately
-    spawnSync(
-      process.execPath,
-      [path.join(ROOT, "hooks", "user-prompt-submit.mjs")],
-      {
-        input: JSON.stringify({ session_id: "s-req", prompt: "turn 2" }),
-        env,
-        encoding: "utf8",
-      },
-    );
-    const preToolReq = spawnSync(
-      process.execPath,
-      [path.join(ROOT, "hooks", "pre-tool-gate.mjs")],
-      {
-        input: JSON.stringify({ session_id: "s-req", tool_name: "web_search", tool_call_id: "c2" }),
-        env,
-        encoding: "utf8",
-      },
-    );
-    assert.equal(preToolReq.status, 0);
-
-    const stopAfterResearch = spawnSync(
-      process.execPath,
-      [path.join(ROOT, "hooks", "stop-turn-gate.mjs")],
-      {
-        input: JSON.stringify({ session_id: "s-req", agent_id: "main" }),
-        env,
-        encoding: "utf8",
-      },
-    );
-    assert.equal(stopAfterResearch.status, 0, "Stop hook must exit 0 after web_search was called");
-  } finally {
-    fs.rmSync(tmpHome, { recursive: true, force: true });
-  }
-});
-
-test("Stdio MCP Server responds to initialize and tools/list", async () => {
+test("Stdio MCP Server registers only web_search and web_fetch", async () => {
   const child = spawn(process.execPath, [path.join(ROOT, "bin", "mcp-server.mjs")], {
     cwd: ROOT,
     stdio: ["pipe", "pipe", "pipe"],
@@ -226,21 +106,17 @@ test("Stdio MCP Server responds to initialize and tools/list", async () => {
   });
 
   try {
-    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }) + "\n");
-    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }) + "\n");
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) + "\n");
 
     const deadline = Date.now() + 3000;
-    while (responses.length < 2 && Date.now() < deadline) {
+    while (responses.length < 1 && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 50));
     }
 
-    assert.equal(responses.length, 2);
+    assert.equal(responses.length, 1);
     assert.equal(responses[0].id, 1);
-    assert.equal(responses[0].result.serverInfo.name, "kimi-web-tools");
-
-    assert.equal(responses[1].id, 2);
-    const toolNames = responses[1].result.tools.map((t: any) => t.name);
-    assert.deepEqual(toolNames, ["web_search", "web_fetch", "web_mode", "web_status"]);
+    const toolNames = responses[0].result.tools.map((t: any) => t.name);
+    assert.deepEqual(toolNames, ["web_search", "web_fetch"]);
   } finally {
     child.kill();
   }

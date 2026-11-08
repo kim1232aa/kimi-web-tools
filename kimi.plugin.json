@@ -1,7 +1,7 @@
 {
   "name": "kimi-web-tools",
   "version": "0.4.0",
-  "description": "Multi-provider web search, web fetch, social platform research (Xiaohongshu & X), per-session Search Mode policy, and standalone Web UI Dashboard for Kimi Code.",
+  "description": "Multi-provider web search and optional web fetch for Kimi Code",
   "keywords": [
     "web-search",
     "web-fetch",
@@ -17,7 +17,6 @@
   ],
   "license": "MIT",
   "skills": "./skills/",
-  "commands": "./commands/",
   "systemPromptPath": "./SYSTEM.md",
   "mcpServers": {
     "web": {
@@ -27,27 +26,9 @@
       "toolTimeoutMs": 120000
     }
   },
-  "hooks": [
-    {
-      "event": "UserPromptSubmit",
-      "command": "node ./hooks/user-prompt-submit.mjs",
-      "timeout": 10
-    },
-    {
-      "event": "PreToolUse",
-      "matcher": "^(FetchURL|web_search|web_fetch|.*__(web_search|web_fetch|search_web|tavily_search))$",
-      "command": "node ./hooks/pre-tool-gate.mjs",
-      "timeout": 10
-    },
-    {
-      "event": "Stop",
-      "command": "node ./hooks/stop-turn-gate.mjs",
-      "timeout": 10
-    }
-  ],
   "interface": {
     "displayName": "Kimi Web Tools",
-    "shortDescription": "Multi-provider web search & fetch gateway with Search Mode and Web UI Dashboard",
+    "shortDescription": "Multi-provider web search and fetch gateway",
     "developerName": "kimi-web-tools"
   }
 }

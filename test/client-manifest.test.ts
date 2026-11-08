@@ -4,9 +4,8 @@
  * Verifies:
  *  - `package.json` declares `kimi-web-tools` v0.4.0 (`type: "module"`) with zero
  *    `@deepseek-ai/*` dependencies or peerDependencies.
- *  - `kimi.plugin.json` declares the `web` MCP server (`./bin/mcp-server.mjs`),
- *    the three lifecycle hooks (`UserPromptSubmit`, `PreToolUse`, `Stop`),
- *    `./commands/`, `./skills/`, and `./SYSTEM.md`.
+ *  - `kimi.plugin.json` declares only the `web` MCP server (`./bin/mcp-server.mjs`)
+ *    and keeps the web-search skill and system prompt without hooks or commands.
  *  - `dist/client/app.js` (once built) is completely self-contained and never
  *    references `@deepseek-ai/*`.
  */
@@ -44,18 +43,18 @@ test("package.json declares kimi-web-tools 0.4.0 with zero @deepseek-ai/* depend
   }
 });
 
-test("kimi.plugin.json declares MCP server, hooks, commands, skills, and SYSTEM.md", () => {
+test("kimi.plugin.json registers the web MCP server without hooks or commands", () => {
   const manifest = readPluginManifest();
   assert.equal(manifest.name, "kimi-web-tools");
   assert.equal(manifest.version, "0.4.0");
   assert.equal(manifest.skills, "./skills/");
-  assert.equal(manifest.commands, "./commands/");
   assert.equal(manifest.systemPromptPath, "./SYSTEM.md");
   assert.equal(manifest.mcpServers?.web?.command, "node");
   assert.deepEqual(manifest.mcpServers?.web?.args, ["./bin/mcp-server.mjs"]);
-
-  const events = (manifest.hooks ?? []).map((h: any) => h.event);
-  assert.deepEqual(events, ["UserPromptSubmit", "PreToolUse", "Stop"]);
+  assert.equal(Object.hasOwn(manifest, "hooks"), false);
+  assert.equal(Object.hasOwn(manifest, "commands"), false);
+  assert.doesNotMatch(manifest.description, /Search Mode|Dashboard/i);
+  assert.doesNotMatch(manifest.interface.shortDescription, /Search Mode|Dashboard/i);
 });
 
 test("built dist/client/app.js never references @deepseek-ai/* packages", () => {
