@@ -68,7 +68,7 @@ async function withTempHome<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-test("minimal gateway serves health, search, and fetch without dashboard routes", async () => {
+test("minimal gateway serves health, search, and fetch through its MCP routes", async () => {
   await withTempHome(async () => {
     const upstream = await startUpstream();
     const handle = await startGatewayServer({
