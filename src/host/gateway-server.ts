@@ -249,7 +249,7 @@ export async function startGatewayServer(options: GatewayServerOptions = {}): Pr
       const pathname = parsedUrl.pathname;
 
       // 1. Static UI & Health routes
-      if (req.method === "GET" && (pathname === "/" || pathname === "/index.html")) {
+      if ((req.method === "GET" || req.method === "HEAD") && (pathname === "/" || pathname === "/index.html")) {
         const htmlCandidates = [
           path.join(projectRoot, "dist", "client", "index.html"),
           path.join(projectRoot, "src", "client", "index.html"),
@@ -263,11 +263,15 @@ export async function startGatewayServer(options: GatewayServerOptions = {}): Pr
           "content-type": "text/html; charset=utf-8",
           "cache-control": "no-cache",
         });
+        if (req.method === "HEAD") {
+          res.end();
+          return;
+        }
         res.end(fs.readFileSync(htmlPath));
         return;
       }
 
-      if (req.method === "GET" && pathname === "/app.js") {
+      if ((req.method === "GET" || req.method === "HEAD") && pathname === "/app.js") {
         const jsPath = path.join(projectRoot, "dist", "client", "app.js");
         if (!fs.existsSync(jsPath)) {
           writeJson(res, 404, {
@@ -280,6 +284,10 @@ export async function startGatewayServer(options: GatewayServerOptions = {}): Pr
           "content-type": "application/javascript; charset=utf-8",
           "cache-control": "no-cache",
         });
+        if (req.method === "HEAD") {
+          res.end();
+          return;
+        }
         res.end(fs.readFileSync(jsPath));
         return;
       }

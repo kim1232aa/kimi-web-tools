@@ -317,7 +317,8 @@ function isSameOrigin(req: WebToolsHttpRequest): boolean {
     // Derive the ACTUAL request scheme from the connection (TLS peers expose
     // socket.encrypted) and compare strictly: scheme + host + port.
     const socket = (req as unknown as { socket?: { encrypted?: unknown } }).socket;
-    const requestScheme = socket?.encrypted ? "https:" : "http:";
+    const forwardedProto = typeof req.headers?.["x-forwarded-proto"] === "string" ? req.headers["x-forwarded-proto"].toLowerCase() : "";
+    const requestScheme = forwardedProto ? (forwardedProto.endsWith(":") ? forwardedProto : `${forwardedProto}:`) : (socket?.encrypted ? "https:" : "http:");
     if (originUrl.protocol !== requestScheme) return false;
     return originUrl.host.toLowerCase() === requestUrl.host.toLowerCase();
   } catch {
