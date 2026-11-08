@@ -94,7 +94,7 @@ test("NineRouterClient forwards search and fetch through the direct contract", a
       assert.equal(requests[0]?.path, "/v1/search");
       assert.equal(requests[0]?.authorization, "Bearer test-key");
       assert.deepEqual(requests[0]?.body, {
-        model: "agy-search",
+        model: "brave",
         query: "minimal gateway",
         max_results: 3,
         search_type: "web",

@@ -1,5 +1,5 @@
 export const DEFAULT_NINEROUTER_URL = "http://127.0.0.1:20128";
-export const DEFAULT_SEARCH_MODEL = "agy-search";
+export const DEFAULT_SEARCH_MODEL = "brave";
 export const DEFAULT_FETCH_MODEL = "jina-reader";
 export const DEFAULT_NINEROUTER_TIMEOUT_MS = 30_000;
 
