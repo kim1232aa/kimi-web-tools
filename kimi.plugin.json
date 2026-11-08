@@ -35,7 +35,7 @@
     },
     {
       "event": "PreToolUse",
-      "matcher": "^(web_search|web_fetch|.*__web_search|.*__web_fetch)$",
+      "matcher": "^(FetchURL|web_search|web_fetch|.*__(web_search|web_fetch|search_web|tavily_search))$",
       "command": "node ./hooks/pre-tool-gate.mjs",
       "timeout": 10
     },

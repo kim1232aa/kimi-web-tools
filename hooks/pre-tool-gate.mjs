@@ -54,8 +54,8 @@ async function readStdinJson() {
 
 function classifyWebTool(toolName) {
   const name = String(toolName || "");
-  if (name === "web_search" || name.endsWith("__web_search")) return "web_search";
-  if (name === "web_fetch" || name.endsWith("__web_fetch")) return "web_fetch";
+  if (name === "web_search" || name.endsWith("__web_search") || name.endsWith("__search_web") || name.endsWith("__search")) return "web_search";
+  if (name === "web_fetch" || name.endsWith("__web_fetch") || name === "FetchURL" || name.endsWith("__fetch")) return "web_fetch";
   return null;
 }
 
