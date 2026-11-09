@@ -33,6 +33,11 @@ export interface NineRouterFetchResult {
   backend: string;
 }
 
+export interface NineRouterWebModels {
+  searchModels: string[];
+  fetchModels: string[];
+}
+
 export class NineRouterError extends Error {
   readonly status?: number;
   readonly endpoint: string;
@@ -80,8 +85,8 @@ function optionalString(value: unknown): string | undefined {
 export class NineRouterClient {
   readonly baseUrl: string;
   readonly apiKey: string;
-  readonly searchModel: string;
-  readonly fetchModel: string;
+  searchModel: string;
+  fetchModel: string;
   readonly timeoutMs: number;
 
   constructor(options: NineRouterClientOptions = {}) {
@@ -92,12 +97,32 @@ export class NineRouterClient {
     this.timeoutMs = positiveTimeout(options.timeoutMs ?? Number(process.env.NINEROUTER_TIMEOUT_MS));
   }
 
-  async search(query: string, maxResults = 8, signal?: AbortSignal): Promise<NineRouterSearchResult> {
+  async listWebModels(signal?: AbortSignal): Promise<NineRouterWebModels> {
+    const payload = await this.request("/v1/models/web", undefined, signal, "GET");
+    const items = Array.isArray(payload.data) ? payload.data : [];
+    const searchModels: string[] = [];
+    const fetchModels: string[] = [];
+    for (const item of items) {
+      if (!isRecord(item) || typeof item.id !== "string" || !item.id.trim()) continue;
+      const rawId = item.id.trim();
+      if (item.kind === "webSearch") {
+        const clean = rawId.endsWith("/search") ? rawId.slice(0, -7) : rawId;
+        if (!searchModels.includes(clean)) searchModels.push(clean);
+      } else if (item.kind === "webFetch") {
+        const clean = rawId.endsWith("/fetch") ? rawId.slice(0, -6) : rawId;
+        if (!fetchModels.includes(clean)) fetchModels.push(clean);
+      }
+    }
+    return { searchModels, fetchModels };
+  }
+
+  async search(query: string, maxResults = 8, signal?: AbortSignal, modelOverride?: string): Promise<NineRouterSearchResult> {
     const cleanQuery = query.trim();
     if (!cleanQuery) throw new NineRouterError("query is required", `${this.baseUrl}/v1/search`);
     const boundedMaxResults = Math.min(Math.max(Math.floor(maxResults), 1), 20);
+    const activeModel = optionalString(modelOverride) ?? this.searchModel;
     const payload = await this.request("/v1/search", {
-      model: this.searchModel,
+      model: activeModel,
       query: cleanQuery,
       max_results: boundedMaxResults,
       search_type: "web",
@@ -123,17 +148,18 @@ export class NineRouterClient {
 
     return {
       query: cleanQuery,
-      backend: optionalString(payload.provider) ?? this.searchModel,
+      backend: optionalString(payload.provider) ?? activeModel,
       sources,
       truncated: payload.truncated === true,
     };
   }
 
-  async fetch(url: string, signal?: AbortSignal): Promise<NineRouterFetchResult> {
+  async fetch(url: string, signal?: AbortSignal, modelOverride?: string): Promise<NineRouterFetchResult> {
     const cleanUrl = url.trim();
     if (!cleanUrl) throw new NineRouterError("url is required", `${this.baseUrl}/v1/web/fetch`);
+    const activeModel = optionalString(modelOverride) ?? this.fetchModel;
     const payload = await this.request("/v1/web/fetch", {
-      model: this.fetchModel,
+      model: activeModel,
       url: cleanUrl,
       format: "markdown",
     }, signal);
@@ -149,11 +175,16 @@ export class NineRouterClient {
       statusCode: typeof payload.status_code === "number" ? payload.status_code : 200,
       body: { kind: "text", content: text },
       truncated: payload.truncated === true,
-      backend: optionalString(payload.provider) ?? this.fetchModel,
+      backend: optionalString(payload.provider) ?? activeModel,
     };
   }
 
-  private async request(pathname: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  private async request(
+    pathname: string,
+    body?: Record<string, unknown>,
+    signal?: AbortSignal,
+    method: "GET" | "POST" = "POST",
+  ): Promise<Record<string, unknown>> {
     const endpoint = `${this.baseUrl}${pathname}`;
     if (!this.apiKey.trim()) {
       throw new NineRouterError("NINEROUTER_KEY is not configured", endpoint);
@@ -174,13 +205,13 @@ export class NineRouterClient {
       let response: Response;
       try {
         response = await fetch(endpoint, {
-          method: "POST",
+          method,
           headers: {
             authorization: `Bearer ${this.apiKey}`,
-            "content-type": "application/json",
+            ...(body !== undefined ? { "content-type": "application/json" } : {}),
             accept: "application/json",
           },
-          body: JSON.stringify(body),
+          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
           signal: controller.signal,
         });
       } catch (error) {

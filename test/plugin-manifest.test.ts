@@ -22,12 +22,13 @@ test("package.json contains only the minimal gateway build and test tooling", ()
   assert.deepEqual(Object.keys(pkg.devDependencies).sort(), ["@types/node", "typescript"]);
 });
 
-test("plugin manifest exposes the web MCP server, skill, and system prompt", () => {
+test("plugin manifest exposes the web MCP server, skill, hooks, and system prompt", () => {
   const manifest = readJson("kimi.plugin.json");
   assert.equal(manifest.name, "kimi-web-tools");
   assert.equal(manifest.skills, "./skills/");
   assert.equal(manifest.systemPromptPath, "./SYSTEM.md");
   assert.deepEqual(manifest.mcpServers?.web?.args, ["./bin/mcp-server.mjs"]);
-  assert.equal(Object.hasOwn(manifest, "hooks"), false);
+  assert.equal(Array.isArray(manifest.hooks), true);
+  assert.equal(manifest.hooks.length, 3);
   assert.equal(Object.hasOwn(manifest, "commands"), false);
 });

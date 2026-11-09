@@ -31,6 +31,46 @@ function getGatewayJsonPath() {
   return path.join(getWebToolsDir(), "gateway.json");
 }
 
+function resolveNodeExecutable() {
+  const candidates = ["/usr/bin/node", "/usr/local/bin/node"];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return process.execPath;
+}
+
+function readNineRouterFallbackEnv() {
+  const out = {};
+  if (!process.env.NINEROUTER_KEY?.trim()) {
+    const home = process.env.KIMI_CODE_HOME?.trim() || path.join(os.homedir(), ".kimi-code");
+    const mcpPath = path.join(home, "mcp.json");
+    if (fs.existsSync(mcpPath)) {
+      try {
+        const mcpDoc = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
+        const nrEnv = mcpDoc?.mcpServers?.["9router"]?.env;
+        if (nrEnv && typeof nrEnv === "object") {
+          if (typeof nrEnv.NINEROUTER_URL === "string" && nrEnv.NINEROUTER_URL.trim() && !process.env.NINEROUTER_URL) {
+            out.NINEROUTER_URL = nrEnv.NINEROUTER_URL.trim();
+          }
+          if (typeof nrEnv.NINEROUTER_KEY === "string" && nrEnv.NINEROUTER_KEY.trim()) {
+            out.NINEROUTER_KEY = nrEnv.NINEROUTER_KEY.trim();
+          }
+        }
+      } catch {}
+    }
+  }
+  if (!process.env.KIMI_WEB_TOOLS_PASSWORD?.trim()) {
+    const pwPath = path.join(getWebToolsDir(), "public-password");
+    if (fs.existsSync(pwPath)) {
+      try {
+        const pw = fs.readFileSync(pwPath, "utf8").trim();
+        if (pw) out.KIMI_WEB_TOOLS_PASSWORD = pw;
+      } catch {}
+    }
+  }
+  return out;
+}
+
 function readGatewayJson() {
   const filePath = getGatewayJsonPath();
   if (!fs.existsSync(filePath)) return null;
@@ -116,6 +156,11 @@ async function loadGatewayModule() {
 }
 
 async function runForeground(host = DEFAULT_HOST, port = DEFAULT_PORT) {
+  const fallbackEnv = readNineRouterFallbackEnv();
+  for (const [k, v] of Object.entries(fallbackEnv)) {
+    if (!process.env[k]) process.env[k] = v;
+  }
+
   const saved = readGatewayJson();
   const hasLocalListener = saved?.host === host && saved?.port === port && Number.isInteger(saved?.internalPort);
   const existing = hasLocalListener
@@ -180,16 +225,19 @@ export async function ensureGatewayDaemon(host = DEFAULT_HOST, port = DEFAULT_PO
   const logPath = path.join(dataDir, "gateway.log");
   const outFd = fs.openSync(logPath, "a");
 
+  const nodeBin = resolveNodeExecutable();
   const compiledEntry = path.join(PROJECT_ROOT, "lib", "host", "gateway-server.js");
   const nodeArgs = fs.existsSync(compiledEntry)
     ? [fileURLToPath(import.meta.url), "--serve"]
     : ["--experimental-strip-types", fileURLToPath(import.meta.url), "--serve"];
 
-  const child = spawn(process.execPath, nodeArgs, {
+  const fallbackEnv = readNineRouterFallbackEnv();
+  const child = spawn(nodeBin, nodeArgs, {
     cwd: PROJECT_ROOT,
     detached: true,
     stdio: ["ignore", outFd, outFd],
     env: {
+      ...fallbackEnv,
       ...process.env,
       KIMI_WEB_TOOLS_HOST: host,
       KIMI_WEB_TOOLS_PORT: String(port),

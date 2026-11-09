@@ -6,7 +6,6 @@
     "web-search",
     "web-fetch",
     "9router",
-    "9router",
     "mcp"
   ],
   "license": "MIT",
@@ -14,12 +13,30 @@
   "systemPromptPath": "./SYSTEM.md",
   "mcpServers": {
     "web": {
-      "command": "node",
+      "command": "/usr/bin/node",
       "args": ["./bin/mcp-server.mjs"],
       "cwd": "./",
       "toolTimeoutMs": 120000
     }
   },
+  "hooks": [
+    {
+      "event": "UserPromptSubmit",
+      "command": "/usr/bin/node ./hooks/user-prompt-submit.mjs",
+      "timeout": 10
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "^(FetchURL|web_search|web_fetch|.*__(web_search|web_fetch|search_web|tavily_search))$",
+      "command": "/usr/bin/node ./hooks/pre-tool-gate.mjs",
+      "timeout": 10
+    },
+    {
+      "event": "Stop",
+      "command": "/usr/bin/node ./hooks/stop-turn-gate.mjs",
+      "timeout": 10
+    }
+  ],
   "interface": {
     "displayName": "Kimi Web Tools",
     "shortDescription": "Minimal 9Router web search and optional fetch gateway",
