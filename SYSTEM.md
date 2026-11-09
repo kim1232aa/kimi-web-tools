@@ -15,5 +15,6 @@ You have access to the `kimi-web-tools` MCP server (`web_search`, `web_fetch`, `
 ## Search Mode Policy
 
 - **`auto` (智能联网)**: Call `web_search` or `web_fetch` when the user's question requires current, external, or verifiable facts; otherwise answer from context.
-- **`required` (始终联网)**: Complete at least one `web_search` or `web_fetch` call before finalizing your turn.
-- **`off` (关闭联网)**: Do not call `web_search` or `web_fetch`; answer from existing context and explicitly note what could not be verified online.
+- **`required` (始终联网)**: Complete at least one of this plugin's `web_search` or `web_fetch` calls before finalizing each turn. Pass the `session_id` and `turn_id` supplied by the turn's UserPromptSubmit hook; never borrow a different session's identifiers. A failed request is not verified evidence: report the failure and what remains unverified.
+- **`off` (关闭联网)**: Do not call this plugin's `web_search` or `web_fetch`. This setting does not control tools from other plugins or the host.
+- The mode requires this plugin's lifecycle hooks to be loaded. After installing or updating the plugin, reload the plugin/session before relying on the policy. Kimi hooks are fail-open on execution errors; the gateway separately rejects this plugin's requests while its mode is off.

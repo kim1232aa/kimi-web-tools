@@ -15,6 +15,7 @@ import { DEFAULT_SETTINGS, validateWebToolsSettings, type WebToolsSettings } fro
 import type { SearchMode } from "../shared/api-types.ts";
 import type { TurnState } from "./search-mode-runtime.ts";
 import type { WebToolsCredentialsService, WebToolsSettingsService } from "./context-types.ts";
+import { readModeState, updateModeState } from "../../hooks/mode-state.mjs";
 
 export interface ModeSessionRecord {
   mode?: SearchMode;
@@ -25,6 +26,7 @@ export interface ModeSessionRecord {
 
 export interface ModeStateDocument {
   globalMode: SearchMode;
+  activeSessionId?: string;
   sessions: Record<string, ModeSessionRecord>;
   updatedAt: number;
 }
@@ -173,98 +175,84 @@ export class LocalStorage {
   // -------------------------------------------------------------------------
 
   readModeState(): ModeStateDocument {
-    if (!fs.existsSync(this.modeStatePath)) {
-      return { globalMode: "auto", sessions: {}, updatedAt: Date.now() };
-    }
-    try {
-      const raw = JSON.parse(fs.readFileSync(this.modeStatePath, "utf8")) as Partial<ModeStateDocument>;
-      const globalMode = isValidMode(raw?.globalMode) ? raw.globalMode : "auto";
-      const sessions: Record<string, ModeSessionRecord> = {};
-      if (raw?.sessions && typeof raw.sessions === "object" && !Array.isArray(raw.sessions)) {
-        for (const [sid, rec] of Object.entries(raw.sessions)) {
-          if (!rec || typeof rec !== "object") continue;
-          sessions[sid] = {
-            ...(isValidMode(rec.mode) ? { mode: rec.mode } : {}),
-            ...(rec.turn && typeof rec.turn === "object" ? { turn: rec.turn } : {}),
-            ...(Array.isArray(rec.pendingTools) ? { pendingTools: rec.pendingTools.map(String) } : {}),
-            updatedAt: typeof rec.updatedAt === "number" ? rec.updatedAt : Date.now(),
-          };
-        }
-      }
-      return {
-        globalMode,
-        sessions,
-        updatedAt: typeof raw?.updatedAt === "number" ? raw.updatedAt : Date.now(),
-      };
-    } catch {
-      return { globalMode: "auto", sessions: {}, updatedAt: Date.now() };
-    }
+    return readModeState(this.modeStatePath);
   }
 
   writeModeState(state: ModeStateDocument): void {
-    // Prune stale sessions if count > 200 to keep mode-state.json compact
-    const entries = Object.entries(state.sessions);
-    if (entries.length > 200) {
-      entries.sort((a, b) => (b[1].updatedAt ?? 0) - (a[1].updatedAt ?? 0));
-      state.sessions = Object.fromEntries(entries.slice(0, 150));
-    }
-    state.updatedAt = Date.now();
-    writeAtomicSync(this.modeStatePath, JSON.stringify(state, null, 2) + "\n", 0o600);
+    updateModeState(this.modeStatePath, (doc) => {
+      doc.globalMode = state.globalMode;
+      doc.sessions = state.sessions;
+    });
   }
 
   getEffectiveSessionMode(sessionId: string): SearchMode {
     const doc = this.readModeState();
-    if (!sessionId || sessionId === "global" || sessionId === "default") {
-      return doc.globalMode;
-    }
-    const explicit = doc.sessions[sessionId]?.mode;
-    return explicit ?? doc.globalMode;
+    if (!sessionId || sessionId === "global" || sessionId === "default") return doc.globalMode;
+    return Object.hasOwn(doc.sessions, sessionId) ? doc.sessions[sessionId].mode ?? doc.globalMode : doc.globalMode;
   }
 
   setSessionMode(sessionId: string, mode: SearchMode): SearchMode {
-    const doc = this.readModeState();
-    if (!sessionId || sessionId === "global" || sessionId === "default") {
-      doc.globalMode = mode;
-      // Also update "global" session entry for UI visibility
-      doc.sessions["global"] = {
-        ...(doc.sessions["global"] ?? {}),
-        mode,
-        updatedAt: Date.now(),
-      };
-    } else {
-      const existing = doc.sessions[sessionId] ?? { updatedAt: Date.now() };
-      existing.mode = mode;
-      existing.updatedAt = Date.now();
-      doc.sessions[sessionId] = existing;
-    }
-    this.writeModeState(doc);
+    if (!isValidMode(mode)) throw new Error("Invalid search mode");
+    updateModeState(this.modeStatePath, (doc) => {
+      const id = !sessionId || sessionId === "default" ? "global" : sessionId;
+      if (id === "global") doc.globalMode = mode;
+      const entry = Object.hasOwn(doc.sessions, id) ? doc.sessions[id] : {};
+      Object.defineProperty(doc.sessions, id, {
+        value: { ...entry, mode, updatedAt: Date.now() },
+        enumerable: true, writable: true, configurable: true,
+      });
+    });
     return mode;
   }
 
   getTurnState(sessionId: string): TurnState | undefined {
     const doc = this.readModeState();
-    return doc.sessions[sessionId]?.turn;
+    return Object.hasOwn(doc.sessions, sessionId) ? doc.sessions[sessionId].turn : undefined;
   }
 
   setTurnState(sessionId: string, turn: TurnState | undefined): void {
+    updateModeState(this.modeStatePath, (doc) => {
+      const existing = Object.hasOwn(doc.sessions, sessionId) ? doc.sessions[sessionId] : {};
+      if (turn === undefined) delete existing.turn;
+      else existing.turn = turn;
+      Object.defineProperty(doc.sessions, sessionId, {
+        value: { ...existing, updatedAt: Date.now() },
+        enumerable: true, writable: true, configurable: true,
+      });
+    });
+  }
+
+  bindToolTurn(sessionId: string, turnId?: number): number | undefined {
     const doc = this.readModeState();
-    const existing = doc.sessions[sessionId] ?? { updatedAt: Date.now() };
-    if (turn === undefined) {
-      delete existing.turn;
-    } else {
-      existing.turn = turn;
+    const entry = Object.hasOwn(doc.sessions, sessionId) ? doc.sessions[sessionId] : undefined;
+    const mode = entry?.mode ?? doc.globalMode;
+    if (mode === "required" && (!sessionId || sessionId === "global" || !entry?.turn || turnId === undefined)) {
+      throw new Error("Required mode needs session_id and turn_id from the current UserPromptSubmit hook.");
     }
-    existing.updatedAt = Date.now();
-    doc.sessions[sessionId] = existing;
-    this.writeModeState(doc);
+    if (turnId !== undefined && turnId !== entry?.turn?.turn) {
+      throw new Error(`Stale or unknown turn for session ${sessionId}; use the current hook's turn_id.`);
+    }
+    return turnId ?? entry?.turn?.turn;
+  }
+
+  completeTool(sessionId: string, kind: "web_search" | "web_fetch", succeeded: boolean, turnId?: number): void {
+    if (!sessionId || sessionId === "global") return;
+    updateModeState(this.modeStatePath, (doc) => {
+      const existing = Object.hasOwn(doc.sessions, sessionId) ? doc.sessions[sessionId] : undefined;
+      if (!existing?.turn || (turnId !== undefined && existing.turn.turn !== turnId)) return;
+      if (kind === "web_search") {
+        existing.turn.webSearchCompleted = true;
+        if (succeeded) existing.turn.webSearchSucceeded = true;
+      } else {
+        existing.turn.webFetchCompleted = true;
+        if (succeeded) existing.turn.webFetchSucceeded = true;
+      }
+      existing.updatedAt = Date.now();
+    });
   }
 
   clearSession(sessionId: string): void {
-    const doc = this.readModeState();
-    if (sessionId in doc.sessions) {
-      delete doc.sessions[sessionId];
-      this.writeModeState(doc);
-    }
+    updateModeState(this.modeStatePath, (doc) => { delete doc.sessions[sessionId]; });
   }
 
   // -------------------------------------------------------------------------

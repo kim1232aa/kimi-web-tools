@@ -26,6 +26,7 @@ import {
   API_PREFIX,
 } from "./routes.ts";
 import { LocalStorage } from "./local-storage.ts";
+import { positiveInteger } from "../../hooks/mode-state.mjs";
 import { CURRENT_VERSION } from "../shared/version.ts";
 import { nextSearchMode, type SearchMode } from "../shared/api-types.ts";
 import {
@@ -466,11 +467,26 @@ export async function startGatewayServer(options: GatewayServerOptions = {}): Pr
       if (pathname.startsWith("/web-tools/mcp/")) {
         const mcpAction = pathname.slice("/web-tools/mcp/".length);
         const payload = req.method === "POST" ? await readJsonBody(req) : {};
+        if (mcpAction === "search" || mcpAction === "fetch") {
+          try {
+            const sessionId = typeof payload.sessionId === "string" && payload.sessionId.trim() ? payload.sessionId.trim() : "global";
+            if (storage.getEffectiveSessionMode(sessionId) === "off") {
+              writeJson(res, 403, { ok: false, error: { code: "mode-off", message: WEB_DISABLED_DENIAL } });
+              return;
+            }
+            payload.turnId = storage.bindToolTurn(sessionId, positiveInteger(payload.turnId, "turn_id"));
+            if (mcpAction === "search") payload.maxResults = positiveInteger(payload.maxResults, "max_results", 20) ?? 8;
+          } catch (error) {
+            writeJson(res, 400, { ok: false, error: { code: "bad-request", message: error instanceof Error ? error.message : String(error) } });
+            return;
+          }
+        }
 
         if (mcpAction === "search") {
           const query = typeof payload.query === "string" ? payload.query.trim() : "";
           const maxResults = typeof payload.maxResults === "number" ? payload.maxResults : 8;
           const sessionId = typeof payload.sessionId === "string" && payload.sessionId.trim() ? payload.sessionId.trim() : "global";
+          const turnId = typeof payload.turnId === "number" ? payload.turnId : undefined;
 
           if (!query) {
             writeJson(res, 400, { ok: false, error: { code: "bad-request", message: "query is required" } });
@@ -491,12 +507,7 @@ export async function startGatewayServer(options: GatewayServerOptions = {}): Pr
           try {
             const started = Date.now();
             const outcome = await searchProvider.search({ query, maxResults });
-            const turn = storage.getTurnState(sessionId);
-            if (turn) {
-              turn.webSearchCompleted = true;
-              turn.webSearchSucceeded = true;
-              storage.setTurnState(sessionId, turn);
-            }
+            storage.completeTool(sessionId, "web_search", true, turnId);
             writeJson(res, 200, {
               ok: true,
               value: {
@@ -509,11 +520,7 @@ export async function startGatewayServer(options: GatewayServerOptions = {}): Pr
               },
             });
           } catch (err) {
-            const turn = storage.getTurnState(sessionId);
-            if (turn) {
-              turn.webSearchCompleted = true;
-              storage.setTurnState(sessionId, turn);
-            }
+            storage.completeTool(sessionId, "web_search", false, turnId);
             writeJson(res, 500, {
               ok: false,
               error: {
@@ -528,6 +535,7 @@ export async function startGatewayServer(options: GatewayServerOptions = {}): Pr
         if (mcpAction === "fetch") {
           const url = typeof payload.url === "string" ? payload.url.trim() : "";
           const sessionId = typeof payload.sessionId === "string" && payload.sessionId.trim() ? payload.sessionId.trim() : "global";
+          const turnId = typeof payload.turnId === "number" ? payload.turnId : undefined;
 
           if (!url) {
             writeJson(res, 400, { ok: false, error: { code: "bad-request", message: "url is required" } });
@@ -548,12 +556,7 @@ export async function startGatewayServer(options: GatewayServerOptions = {}): Pr
           try {
             const started = Date.now();
             const outcome = await fetchProvider.fetch({ url });
-            const turn = storage.getTurnState(sessionId);
-            if (turn) {
-              turn.webFetchCompleted = true;
-              turn.webFetchSucceeded = true;
-              storage.setTurnState(sessionId, turn);
-            }
+            storage.completeTool(sessionId, "web_fetch", true, turnId);
             writeJson(res, 200, {
               ok: true,
               value: {
@@ -562,11 +565,7 @@ export async function startGatewayServer(options: GatewayServerOptions = {}): Pr
               },
             });
           } catch (err) {
-            const turn = storage.getTurnState(sessionId);
-            if (turn) {
-              turn.webFetchCompleted = true;
-              storage.setTurnState(sessionId, turn);
-            }
+            storage.completeTool(sessionId, "web_fetch", false, turnId);
             writeJson(res, 500, {
               ok: false,
               error: {

@@ -42,26 +42,22 @@ function readGatewayJson() {
 }
 
 async function checkGatewayHealth(host = DEFAULT_HOST, port = DEFAULT_PORT, timeoutMs = 1500) {
-  const url = `http://${host}:${port}/web-tools/api/version/check`;
+  const url = `http://${host}:${port}/health`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   timer.unref?.();
   try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "{}",
-      signal: controller.signal,
-    });
-    if (!res.ok) return null;
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) throw new Error(`Gateway health ${url}: HTTP ${res.status}`);
     const json = await res.json();
-    if (json && json.ok && json.value) {
+    if (json?.ok === true && json.value?.status === "healthy" && typeof json.value.version === "string" && Number.isSafeInteger(json.value.pid)) {
       return {
         healthy: true,
         host,
         port,
         url: `http://${host}:${port}`,
-        version: json.value.currentVersion,
+        version: json.value.version,
+        pid: json.value.pid,
       };
     }
     return null;
@@ -116,11 +112,21 @@ async function runForeground(host = DEFAULT_HOST, port = DEFAULT_PORT) {
 }
 
 function resolveNodeExecutable() {
-  const candidates = ["/usr/bin/node", "/usr/local/bin/node"];
+  const name = process.platform === "win32" ? "node.exe" : "node";
+  const candidates = [
+    ...(/^(node|nodejs)(\.exe)?$/i.test(path.basename(process.execPath)) ? [process.execPath] : []),
+    ...((process.env.PATH || "").split(path.delimiter).filter(Boolean).map(dir => path.join(dir, name))),
+    "/usr/bin/node", "/usr/local/bin/node",
+  ];
   for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate;
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch (error) {
+      if (!["ENOENT", "EACCES", "ENOTDIR"].includes(error.code)) throw error;
+    }
   }
-  return process.execPath;
+  throw new Error("Node.js executable not found on PATH; cannot start gateway (refusing to invoke the Kimi host binary).");
 }
 
 export async function ensureGatewayDaemon(host = DEFAULT_HOST, port = DEFAULT_PORT) {
@@ -143,32 +149,37 @@ export async function ensureGatewayDaemon(host = DEFAULT_HOST, port = DEFAULT_PO
     ? [fileURLToPath(import.meta.url), "--serve"]
     : ["--experimental-strip-types", fileURLToPath(import.meta.url), "--serve"];
 
-  const child = spawn(resolveNodeExecutable(), nodeArgs, {
-    cwd: PROJECT_ROOT,
-    detached: true,
-    stdio: ["ignore", outFd, outFd],
-    env: {
-      ...process.env,
-      KIMI_WEB_TOOLS_HOST: host,
-      KIMI_WEB_TOOLS_PORT: String(port),
-    },
-  });
-  child.unref();
+  let child;
+  let spawnError;
   try {
+    child = spawn(resolveNodeExecutable(), nodeArgs, {
+      cwd: PROJECT_ROOT,
+      detached: true,
+      stdio: ["ignore", outFd, outFd],
+      env: {
+        ...process.env,
+        KIMI_WEB_TOOLS_HOST: host,
+        KIMI_WEB_TOOLS_PORT: String(port),
+      },
+    });
+    child.on("error", error => { spawnError = error; });
+    child.unref();
+  } finally {
     fs.closeSync(outFd);
-  } catch {}
+  }
 
   const deadline = Date.now() + 8000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 150));
+    if (spawnError) throw new Error(`Gateway spawn failed: ${spawnError.message}; log: ${logPath}`, { cause: spawnError });
     const ready = await checkGatewayHealth(host, port);
-    if (ready) {
-      const updated = readGatewayJson();
-      return { status: "spawned", pid: updated?.pid ?? child.pid, ...ready };
+    if (ready) return { status: "spawned", ...ready };
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(`Gateway exited before becoming healthy (exit code ${child.exitCode}, signal ${child.signalCode}); log: ${logPath}`);
     }
   }
 
-  throw new Error(`Gateway daemon failed to become healthy on http://${host}:${port} within 8s`);
+  throw new Error(`Gateway daemon failed to become healthy on http://${host}:${port} within 8s; log: ${logPath}`);
 }
 
 async function stopGatewayDaemon() {

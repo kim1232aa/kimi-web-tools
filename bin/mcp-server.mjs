@@ -10,34 +10,15 @@
  *    3. `web_mode`   — View or switch Search Mode (`auto`, `required`, `off`)
  *    4. `web_status` — Inspect gateway, providers, quotas, and platform login state
  */
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import readline from "node:readline";
 import { ensureGatewayDaemon } from "./gateway-daemon.mjs";
+import { positiveInteger } from "../hooks/mode-state.mjs";
 
 const VERSION = "0.4.0";
 const PROTOCOL_VERSION = "2025-06-18";
 
-function getWebToolsDir() {
-  const explicit = process.env.KIMI_CODE_HOME?.trim();
-  const home = explicit && explicit.length > 0 ? explicit : path.join(os.homedir(), ".kimi-code");
-  return path.join(home, "web-tools");
-}
-
-function getActiveSessionId(explicitSessionId) {
-  if (typeof explicitSessionId === "string" && explicitSessionId.trim().length > 0) {
-    return explicitSessionId.trim();
-  }
-  const modeStatePath = path.join(getWebToolsDir(), "mode-state.json");
-  if (!fs.existsSync(modeStatePath)) return "global";
-  try {
-    const doc = JSON.parse(fs.readFileSync(modeStatePath, "utf8"));
-    if (typeof doc.activeSessionId === "string" && doc.activeSessionId.trim()) {
-      return doc.activeSessionId.trim();
-    }
-  } catch {}
-  return "global";
+function requestSessionId(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "global";
 }
 
 const TOOLS = [
@@ -54,12 +35,22 @@ const TOOLS = [
             "Search query string. Use `小红书: <topic>` or `X: <topic>` to route directly to Xiaohongshu or Twitter/X.",
         },
         max_results: {
-          type: "number",
+          type: ["integer", "string"],
+          minimum: 1,
+          maximum: 20,
+          pattern: "^[1-9][0-9]*$",
           description: "Maximum number of results to return (default: 8, max: 20).",
         },
         session_id: {
           type: "string",
           description: "Optional session identifier.",
+        },
+        turn_id: {
+          type: ["integer", "string"],
+          minimum: 1,
+          maximum: Number.MAX_SAFE_INTEGER,
+          pattern: "^[1-9][0-9]*$",
+          description: "Optional turn identifier injected by UserPromptSubmit hook.",
         },
       },
       required: ["query"],
@@ -79,6 +70,13 @@ const TOOLS = [
         session_id: {
           type: "string",
           description: "Optional session identifier.",
+        },
+        turn_id: {
+          type: ["integer", "string"],
+          minimum: 1,
+          maximum: Number.MAX_SAFE_INTEGER,
+          pattern: "^[1-9][0-9]*$",
+          description: "Optional turn identifier injected by UserPromptSubmit hook.",
         },
       },
       required: ["url"],
@@ -244,26 +242,22 @@ function formatStatusOutput(value) {
 async function runTool(params) {
   const name = params?.name;
   const args = params?.arguments ?? {};
-  const sessionId = getActiveSessionId(args.session_id ?? args.sessionId);
-
+  const sessionId = requestSessionId(args.session_id ?? args.sessionId);
   try {
+    const rawTurnId = Object.hasOwn(args, "turn_id") ? args.turn_id : args.turnId;
+    const turnId = positiveInteger(rawTurnId, "turn_id");
     if (name === "web_search") {
       const query = typeof args.query === "string" ? args.query.trim() : "";
       if (!query) throw new Error("Missing required argument: query");
-      const maxResults =
-        typeof args.max_results === "number"
-          ? args.max_results
-          : typeof args.maxResults === "number"
-            ? args.maxResults
-            : 8;
-      const result = await callGatewayMcp("search", { query, maxResults, sessionId });
+      const maxResults = positiveInteger(Object.hasOwn(args, "max_results") ? args.max_results : args.maxResults, "max_results", 20) ?? 8;
+      const result = await callGatewayMcp("search", { query, maxResults, sessionId, turnId });
       return { content: [{ type: "text", text: formatSearchOutput(result) }] };
     }
 
     if (name === "web_fetch") {
       const url = typeof args.url === "string" ? args.url.trim() : "";
       if (!url) throw new Error("Missing required argument: url");
-      const result = await callGatewayMcp("fetch", { url, sessionId });
+      const result = await callGatewayMcp("fetch", { url, sessionId, turnId });
       return { content: [{ type: "text", text: formatFetchOutput(result) }] };
     }
 
@@ -301,8 +295,6 @@ async function handleRequest(message) {
   const { method, id, params } = message;
   switch (method) {
     case "initialize":
-      // Warm up gateway in background on MCP initialize
-      void ensureGatewayDaemon().catch(() => {});
       return {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: { tools: {} },
@@ -327,23 +319,16 @@ function send(message) {
 }
 
 async function dispatch(message) {
-  if (message?.jsonrpc !== "2.0") return;
-  if (message.id === undefined || message.id === null) {
-    return;
-  }
+  if (message?.jsonrpc !== "2.0" || message.id === undefined || message.id === null) return;
   const id = message.id;
   try {
     const result = await handleRequest(message);
     send({ jsonrpc: "2.0", id, result: result ?? {} });
   } catch (err) {
-    if (err && typeof err === "object" && err.jsonRpc) {
-      send({ jsonrpc: "2.0", id, error: err.jsonRpc });
-      return;
-    }
     send({
       jsonrpc: "2.0",
       id,
-      error: {
+      error: err?.jsonRpc ?? {
         code: -32603,
         message: err instanceof Error ? err.message : String(err),
       },
@@ -371,9 +356,6 @@ function start() {
       return;
     }
     void dispatch(message);
-  });
-  rl.on("close", () => {
-    process.exit(0);
   });
 }
 

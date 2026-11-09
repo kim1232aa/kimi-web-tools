@@ -1,123 +1,88 @@
 #!/usr/bin/env node
-/**
- * kimi-web-tools — Stop Hook (`hooks/stop-turn-gate.mjs`).
- *
- * Enforces the `required` Search Mode turn policy:
- * If the current turn has `required: true` (or effective mode is `required`)
- * and neither `webSearchCompleted` nor `webFetchCompleted` is true, steers the
- * model once (`correctionCount === 0` -> exit 2 with `REQUIRED_SEARCH_CORRECTION_TEXT`
- * on stderr) so it calls `web_search` or `web_fetch` before finalizing.
- * Never loops more than once per turn.
- */
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import {
+  webToolsDir,
+  updateModeState,
+  effectiveMode,
+  hookPayload,
+  hookFailure,
+} from "./mode-state.mjs";
 
 const REQUIRED_SEARCH_CORRECTION_TEXT =
   "Web Search is required for this turn. Call web_search or web_fetch before finalizing.";
 
-function getWebToolsDir() {
-  const explicit = process.env.KIMI_CODE_HOME?.trim();
-  const home = explicit && explicit.length > 0 ? explicit : path.join(os.homedir(), ".kimi-code");
-  return path.join(home, "web-tools");
-}
-
-function readJsonFile(filePath, fallback) {
-  if (!fs.existsSync(filePath)) return fallback;
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return fallback;
-  }
-}
-
-function writeAtomic(filePath, data) {
-  const dir = path.dirname(filePath);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-  fs.renameSync(tmp, filePath);
-}
-
-async function readStdinJson() {
-  let raw = "";
-  for await (const chunk of process.stdin) {
-    raw += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-  }
-  if (!raw.trim()) return {};
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return {};
-  }
-}
+const FAILED_RESEARCH_REMINDER =
+  "Web research failed during this turn; state clearly what could not be verified (未验证).";
 
 async function main() {
-  const payload = await readStdinJson();
+  const payload = await hookPayload();
 
-  // Do not gate subagents or re-entrant stop hooks
   if (payload.stop_hook_active) {
-    process.exit(0);
+    return;
   }
   if (payload.agent_id && payload.agent_id !== "main") {
-    process.exit(0);
+    return;
   }
 
   const sessionId =
     typeof payload.session_id === "string" && payload.session_id.trim() ? payload.session_id.trim() : "global";
-  const modeStatePath = path.join(getWebToolsDir(), "mode-state.json");
-  const doc = readJsonFile(modeStatePath, { globalMode: "auto", sessions: {}, updatedAt: Date.now() });
-  if (!doc.sessions || typeof doc.sessions !== "object") {
-    process.exit(0);
-  }
+  const modeStatePath = path.join(webToolsDir(), "mode-state.json");
 
-  const globalMode =
-    doc.globalMode === "required" || doc.globalMode === "off" || doc.globalMode === "auto"
-      ? doc.globalMode
-      : "auto";
-  const sessionEntry = doc.sessions[sessionId] || {};
-  const effectiveMode =
-    sessionEntry.mode === "required" || sessionEntry.mode === "off" || sessionEntry.mode === "auto"
-      ? sessionEntry.mode
-      : globalMode;
+  let shouldSteer = false;
+  let turnId;
+  let failedResearch = false;
 
-  const turn = sessionEntry.turn || {
-    turn: 1,
-    required: effectiveMode === "required",
-    disabled: effectiveMode === "off",
-    webSearchCompleted: false,
-    webSearchSucceeded: false,
-    webFetchCompleted: false,
-    webFetchSucceeded: false,
-    correctionCount: 0,
-  };
-
-  if (!turn.required || turn.disabled) {
-    process.exit(0);
-  }
-
-  const completed = Boolean(turn.webSearchCompleted || turn.webFetchCompleted);
-  if (completed) {
-    process.exit(0);
-  }
-
-  if ((turn.correctionCount ?? 0) === 0) {
-    turn.correctionCount = 1;
-    doc.sessions[sessionId] = {
-      ...sessionEntry,
-      turn,
-      updatedAt: Date.now(),
+  updateModeState(modeStatePath, (doc) => {
+    const mode = effectiveMode(doc, sessionId);
+    if (mode !== "required") {
+      return;
+    }
+    const sessionEntry = Object.hasOwn(doc.sessions, sessionId) ? doc.sessions[sessionId] : {};
+    const turn = sessionEntry.turn || {
+      turn: 1,
+      required: true,
+      disabled: false,
+      webSearchCompleted: false,
+      webSearchSucceeded: false,
+      webFetchCompleted: false,
+      webFetchSucceeded: false,
+      correctionCount: 0,
     };
-    doc.updatedAt = Date.now();
-    writeAtomic(modeStatePath, doc);
 
-    process.stderr.write(REQUIRED_SEARCH_CORRECTION_TEXT);
+    const completed = Boolean(turn.webSearchCompleted || turn.webFetchCompleted);
+    const succeeded = Boolean(turn.webSearchSucceeded || turn.webFetchSucceeded);
+
+    if (completed) {
+      if (!succeeded) {
+        failedResearch = true;
+      }
+      return;
+    }
+
+    if ((turn.correctionCount ?? 0) === 0) {
+      turn.correctionCount = 1;
+      Object.defineProperty(doc.sessions, sessionId, {
+        value: {
+          ...sessionEntry,
+          turn,
+          updatedAt: Date.now(),
+        },
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
+      shouldSteer = true;
+      turnId = turn.turn;
+    }
+  });
+
+  if (shouldSteer) {
+    process.stderr.write(`${REQUIRED_SEARCH_CORRECTION_TEXT} (session_id="${sessionId}", turn_id=${turnId})`);
     process.exit(2);
   }
-
-  process.exit(0);
+  if (failedResearch) {
+    process.stdout.write(`${FAILED_RESEARCH_REMINDER}\n`);
+  }
 }
 
-main().catch(() => {
-  process.exit(0);
-});
+main().catch(hookFailure);

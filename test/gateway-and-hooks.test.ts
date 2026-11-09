@@ -172,7 +172,7 @@ test("Kimi Code Hooks enforce off-mode gate and required-mode stop turn steer", 
     );
     assert.equal(stopSecondTime.status, 0, "Stop hook must not loop after one correction steer");
 
-    // New turn where PreToolUse records web_search -> Stop exits 0 immediately
+    // New turn where actual search completion is recorded -> Stop exits 0 immediately
     spawnSync(
       process.execPath,
       [path.join(ROOT, "hooks", "user-prompt-submit.mjs")],
@@ -192,6 +192,12 @@ test("Kimi Code Hooks enforce off-mode gate and required-mode stop turn steer", 
       },
     );
     assert.equal(preToolReq.status, 0);
+
+    // Simulate gateway completing the search tool call
+    const docAfterPre = JSON.parse(fs.readFileSync(modeStatePath, "utf8"));
+    docAfterPre.sessions["s-req"].turn.webSearchCompleted = true;
+    docAfterPre.sessions["s-req"].turn.webSearchSucceeded = true;
+    fs.writeFileSync(modeStatePath, JSON.stringify(docAfterPre, null, 2), "utf8");
 
     const stopAfterResearch = spawnSync(
       process.execPath,
