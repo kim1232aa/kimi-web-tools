@@ -31,46 +31,6 @@ function getGatewayJsonPath() {
   return path.join(getWebToolsDir(), "gateway.json");
 }
 
-function resolveNodeExecutable() {
-  const candidates = ["/usr/bin/node", "/usr/local/bin/node"];
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return process.execPath;
-}
-
-function readNineRouterFallbackEnv() {
-  const out = {};
-  if (!process.env.NINEROUTER_KEY?.trim()) {
-    const home = process.env.KIMI_CODE_HOME?.trim() || path.join(os.homedir(), ".kimi-code");
-    const mcpPath = path.join(home, "mcp.json");
-    if (fs.existsSync(mcpPath)) {
-      try {
-        const mcpDoc = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
-        const nrEnv = mcpDoc?.mcpServers?.["9router"]?.env;
-        if (nrEnv && typeof nrEnv === "object") {
-          if (typeof nrEnv.NINEROUTER_URL === "string" && nrEnv.NINEROUTER_URL.trim() && !process.env.NINEROUTER_URL) {
-            out.NINEROUTER_URL = nrEnv.NINEROUTER_URL.trim();
-          }
-          if (typeof nrEnv.NINEROUTER_KEY === "string" && nrEnv.NINEROUTER_KEY.trim()) {
-            out.NINEROUTER_KEY = nrEnv.NINEROUTER_KEY.trim();
-          }
-        }
-      } catch {}
-    }
-  }
-  if (!process.env.KIMI_WEB_TOOLS_PASSWORD?.trim()) {
-    const pwPath = path.join(getWebToolsDir(), "public-password");
-    if (fs.existsSync(pwPath)) {
-      try {
-        const pw = fs.readFileSync(pwPath, "utf8").trim();
-        if (pw) out.KIMI_WEB_TOOLS_PASSWORD = pw;
-      } catch {}
-    }
-  }
-  return out;
-}
-
 function readGatewayJson() {
   const filePath = getGatewayJsonPath();
   if (!fs.existsSync(filePath)) return null;
@@ -81,61 +41,27 @@ function readGatewayJson() {
   }
 }
 
-function writeGatewayJson(handle) {
-  const directory = getWebToolsDir();
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const filePath = getGatewayJsonPath();
-  const state = {
-    pid: process.pid,
-    host: handle.host,
-    port: handle.port,
-    internalPort: handle.internalPort,
-    url: handle.url,
-    startedAt: Date.now(),
-  };
-  fs.writeFileSync(filePath, `${JSON.stringify(state, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {}
-}
-
-function clearGatewayJson(onlyPid) {
-  const filePath = getGatewayJsonPath();
-  if (!fs.existsSync(filePath)) return;
-  if (onlyPid !== undefined) {
-    const current = readGatewayJson();
-    if (current && current.pid !== onlyPid) return;
-  }
-  try {
-    fs.unlinkSync(filePath);
-  } catch {}
-}
-
-async function checkGatewayHealth(host = DEFAULT_HOST, port = DEFAULT_PORT, timeoutMs = 1500, internalPort) {
-  const internalUrl = Number.isInteger(internalPort) && internalPort > 0
-    ? `http://127.0.0.1:${internalPort}`
-    : undefined;
-  const publicUrl = `http://${host}:${port}`;
-  const url = `${internalUrl || publicUrl}/health`;
-  const headers = { accept: "application/json" };
-  if (!internalUrl && process.env.KIMI_WEB_TOOLS_PASSWORD) {
-    headers.authorization = `Bearer ${process.env.KIMI_WEB_TOOLS_PASSWORD}`;
-  }
+async function checkGatewayHealth(host = DEFAULT_HOST, port = DEFAULT_PORT, timeoutMs = 1500) {
+  const url = `http://${host}:${port}/web-tools/api/version/check`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   timer.unref?.();
   try {
-    const res = await fetch(url, { headers, signal: controller.signal });
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+      signal: controller.signal,
+    });
     if (!res.ok) return null;
     const json = await res.json();
-    if (json?.ok === true && json.value?.status === "healthy") {
+    if (json && json.ok && json.value) {
       return {
         healthy: true,
         host,
         port,
-        url: publicUrl,
-        ...(internalUrl ? { internalUrl } : {}),
-        version: json.value.version,
+        url: `http://${host}:${port}`,
+        version: json.value.currentVersion,
       };
     }
     return null;
@@ -156,34 +82,22 @@ async function loadGatewayModule() {
 }
 
 async function runForeground(host = DEFAULT_HOST, port = DEFAULT_PORT) {
-  const fallbackEnv = readNineRouterFallbackEnv();
-  for (const [k, v] of Object.entries(fallbackEnv)) {
-    if (!process.env[k]) process.env[k] = v;
-  }
-
-  const saved = readGatewayJson();
-  const hasLocalListener = saved?.host === host && saved?.port === port && Number.isInteger(saved?.internalPort);
-  const existing = hasLocalListener
-    ? await checkGatewayHealth(host, port, 1500, saved.internalPort)
-    : null;
+  const existing = await checkGatewayHealth(host, port);
   if (existing) {
     console.log(JSON.stringify({ status: "already-running", ...existing }));
     return;
   }
   const { startGatewayServer } = await loadGatewayModule();
-  const handle = await startGatewayServer({ host, port });
-  try {
-    writeGatewayJson(handle);
-  } catch (error) {
-    await handle.close().catch(() => {});
-    throw error;
-  }
+  const handle = await startGatewayServer({
+    host,
+    port,
+    projectRoot: PROJECT_ROOT,
+  });
 
   const shutdown = async () => {
     try {
       await handle.close();
     } catch {}
-    clearGatewayJson(process.pid);
     process.exit(0);
   };
 
@@ -201,23 +115,22 @@ async function runForeground(host = DEFAULT_HOST, port = DEFAULT_PORT) {
   );
 }
 
+function resolveNodeExecutable() {
+  const candidates = ["/usr/bin/node", "/usr/local/bin/node"];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return process.execPath;
+}
+
 export async function ensureGatewayDaemon(host = DEFAULT_HOST, port = DEFAULT_PORT) {
   const saved = readGatewayJson();
   const checkHost = saved?.host || host;
   const checkPort = saved?.port || port;
-  const internalPort = Number.isInteger(saved?.internalPort) ? saved.internalPort : undefined;
 
-  const health = internalPort
-    ? await checkGatewayHealth(checkHost, checkPort, 1500, internalPort)
-    : null;
+  const health = await checkGatewayHealth(checkHost, checkPort);
   if (health) {
-    return {
-      status: "running",
-      pid: saved?.pid,
-      ...health,
-      publicUrl: health.url,
-      url: health.internalUrl,
-    };
+    return { status: "running", pid: saved?.pid, ...health };
   }
 
   const dataDir = getWebToolsDir();
@@ -225,19 +138,16 @@ export async function ensureGatewayDaemon(host = DEFAULT_HOST, port = DEFAULT_PO
   const logPath = path.join(dataDir, "gateway.log");
   const outFd = fs.openSync(logPath, "a");
 
-  const nodeBin = resolveNodeExecutable();
   const compiledEntry = path.join(PROJECT_ROOT, "lib", "host", "gateway-server.js");
   const nodeArgs = fs.existsSync(compiledEntry)
     ? [fileURLToPath(import.meta.url), "--serve"]
     : ["--experimental-strip-types", fileURLToPath(import.meta.url), "--serve"];
 
-  const fallbackEnv = readNineRouterFallbackEnv();
-  const child = spawn(nodeBin, nodeArgs, {
+  const child = spawn(resolveNodeExecutable(), nodeArgs, {
     cwd: PROJECT_ROOT,
     detached: true,
     stdio: ["ignore", outFd, outFd],
     env: {
-      ...fallbackEnv,
       ...process.env,
       KIMI_WEB_TOOLS_HOST: host,
       KIMI_WEB_TOOLS_PORT: String(port),
@@ -251,17 +161,10 @@ export async function ensureGatewayDaemon(host = DEFAULT_HOST, port = DEFAULT_PO
   const deadline = Date.now() + 8000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 150));
-    const updated = readGatewayJson();
-    if (!Number.isInteger(updated?.internalPort)) continue;
-    const ready = await checkGatewayHealth(host, port, 1500, updated.internalPort);
+    const ready = await checkGatewayHealth(host, port);
     if (ready) {
-      return {
-        status: "spawned",
-        pid: updated?.pid ?? child.pid,
-        ...ready,
-        publicUrl: ready.url,
-        url: ready.internalUrl,
-      };
+      const updated = readGatewayJson();
+      return { status: "spawned", pid: updated?.pid ?? child.pid, ...ready };
     }
   }
 
@@ -275,7 +178,12 @@ async function stopGatewayDaemon() {
       process.kill(saved.pid, "SIGTERM");
     } catch {}
   }
-  clearGatewayJson();
+  const gwPath = getGatewayJsonPath();
+  if (fs.existsSync(gwPath)) {
+    try {
+      fs.unlinkSync(gwPath);
+    } catch {}
+  }
   return { status: "stopped", pid: saved?.pid ?? null };
 }
 
@@ -285,7 +193,7 @@ async function main() {
 
   if (cmd === "status" || cmd === "--status") {
     const saved = readGatewayJson();
-    const health = await checkGatewayHealth(saved?.host || DEFAULT_HOST, saved?.port || DEFAULT_PORT, 1500, saved?.internalPort);
+    const health = await checkGatewayHealth(saved?.host || DEFAULT_HOST, saved?.port || DEFAULT_PORT);
     console.log(
       JSON.stringify(
         {

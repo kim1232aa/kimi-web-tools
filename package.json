@@ -1,26 +1,39 @@
 {
   "name": "kimi-web-tools",
   "version": "0.4.0",
-  "description": "Minimal 9Router web search and optional fetch gateway for Kimi Code",
+  "description": "Multi-provider web search, web fetch, and social platform research plugin & standalone gateway for Kimi Code",
   "type": "module",
   "license": "MIT",
-  "keywords": ["web-search", "web-fetch", "9router", "agy-search", "mcp"],
-  "main": "./lib/host/gateway-server.js",
+  "main": "./lib/host/index.js",
   "exports": {
-    ".": "./lib/host/gateway-server.js",
-    "./gateway": "./lib/host/gateway-server.js"
+    ".": "./lib/host/index.js",
+    "./gateway": "./lib/host/gateway-server.js",
+    "./storage": "./lib/host/local-storage.js"
   },
   "bin": {
     "kimi-web-tools-gateway": "./bin/gateway-daemon.mjs",
     "kimi-web-tools-mcp": "./bin/mcp-server.mjs"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build:host": "tsc -p tsconfig.build.json",
+    "build:client": "node build-client.mjs",
+    "build": "tsc -p tsconfig.build.json && node build-client.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "test": "node --experimental-strip-types --test test/*.test.ts test/*.test.mjs test/*.smoke.mjs"
+  },
+  "dependencies": {
+    "defuddle": "^0.19.6",
+    "linkedom": "^0.18.9",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "undici": "^7.5.0",
+    "ws": "^8.18.1"
   },
   "devDependencies": {
     "@types/node": "^22.13.10",
+    "@types/react": "^19.0.10",
+    "@types/ws": "^8.18.0",
+    "esbuild": "^0.25.1",
     "typescript": "^5.8.2"
   }
 }

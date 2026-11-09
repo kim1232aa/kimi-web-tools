@@ -1,4 +1,13 @@
 #!/usr/bin/env node
+/**
+ * kimi-web-tools — UserPromptSubmit Hook.
+ *
+ * Freezes the per-turn Search Mode state (`auto`, `required`, `off`) in
+ * `$KIMI_CODE_HOME/web-tools/mode-state.json` when a user prompt begins,
+ * records the active session ID, and outputs the step-1 Search Mode policy
+ * snapshot so the model knows whether web research is optional, required,
+ * or disabled for this turn.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +16,19 @@ const REQUIRED_SEARCH_TEXT = [
   "Web Search is required for this turn.",
   "Before finalizing, complete at least one web_search or web_fetch call.",
   "Use web_fetch for a specific URL; otherwise use web_search.",
-  "Treat web_search snippets as discovery evidence, not full-page details.",
+  "To target a platform, use exactly one routing prefix such as 小红书: or X:; do not repeat the platform name as a topic keyword.",
+  "The provider removes that routing prefix before entering the platform search box.",
+  "Treat web_search snippets as discovery evidence, not page details or comments.",
+  "Describe comments or replies as verified only when web_fetch returns their contents.",
+  "If web access fails, say what could not be verified.",
+].join("\n");
+
+const REQUIRED_SEARCH_TEXT_NO_PLATFORMS = [
+  "Web Search is required for this turn.",
+  "Before finalizing, complete at least one web_search or web_fetch call.",
+  "Use web_fetch for a specific URL; otherwise use web_search.",
+  "Treat web_search snippets as discovery evidence, not page details or comments.",
+  "Describe comments or replies as verified only when web_fetch returns their contents.",
   "If web access fails, say what could not be verified.",
 ].join("\n");
 
@@ -59,6 +80,7 @@ async function main() {
 
   const baseDir = getWebToolsDir();
   const modeStatePath = path.join(baseDir, "mode-state.json");
+  const configPath = path.join(baseDir, "config.json");
 
   const doc = readJsonFile(modeStatePath, { globalMode: "auto", sessions: {}, updatedAt: Date.now() });
   if (!doc.sessions || typeof doc.sessions !== "object") doc.sessions = {};
@@ -94,10 +116,14 @@ async function main() {
   doc.updatedAt = Date.now();
   writeAtomic(modeStatePath, doc);
 
+  const cfg = readJsonFile(configPath, {});
+  const platforms = cfg?.platformEnabled ?? { xiaohongshu: true, x: true };
+  const platformsEnabled = platforms.xiaohongshu !== false || platforms.x !== false;
+
   if (effectiveMode === "off") {
     process.stdout.write(`${SEARCH_DISABLED_TEXT}\n`);
   } else if (effectiveMode === "required") {
-    process.stdout.write(`${REQUIRED_SEARCH_TEXT}\n`);
+    process.stdout.write(`${platformsEnabled ? REQUIRED_SEARCH_TEXT : REQUIRED_SEARCH_TEXT_NO_PLATFORMS}\n`);
   } else {
     process.stdout.write(`${SEARCH_AUTO_TEXT}\n`);
   }

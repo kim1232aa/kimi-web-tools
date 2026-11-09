@@ -4,6 +4,7 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "lib": ["ES2022", "DOM"],
+    "jsx": "react-jsx",
     "strict": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
@@ -14,6 +15,6 @@
     "noUnusedParameters": true,
     "types": ["node"]
   },
-  "include": ["src/host/9router-client.ts", "src/host/gateway-server.ts"],
+  "include": ["src/host/**/*.ts", "src/client/**/*.ts", "src/client/**/*.tsx", "src/shared/**/*.ts", "src/types/**/*.d.ts"],
   "exclude": ["node_modules", "lib", "dist"]
 }

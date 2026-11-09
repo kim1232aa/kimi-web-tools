@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kimi Web Tools — Search &amp; Research Gateway</title>
+  <style>
+    :root,
+    [data-theme="light"] {
+      --dsw-font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      --ds-font-family-code: ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace;
+
+      --dsw-alias-label-primary: #0f172a;
+      --dsw-alias-label-secondary: #475569;
+      --dsw-alias-label-tertiary: #64748b;
+      --dsw-alias-label-dimmed: #94a3b8;
+      --dsw-alias-label-primary-foreground: #ffffff;
+
+      --dsw-alias-bg-base: #f8fafc;
+      --dsw-alias-bg-layer-1: #ffffff;
+      --dsw-alias-bg-layer-2: #f1f5f9;
+      --dsw-alias-bg-mask-2: rgba(15, 23, 42, 0.45);
+
+      --dsw-alias-border-l2: #e2e8f0;
+      --dsw-alias-border-l3: #cbd5e1;
+
+      --dsw-alias-interactive-bg-hover: rgba(15, 23, 42, 0.05);
+      --dsw-alias-interactive-bg-active: rgba(15, 23, 42, 0.09);
+      --dsw-alias-interactive-bg-hover-danger: rgba(239, 68, 68, 0.1);
+
+      --dsw-alias-state-success-primary: #10b981;
+      --dsw-alias-state-warn-primary: #f59e0b;
+      --dsw-alias-state-warn-label: #b45309;
+      --dsw-alias-state-error-primary: #ef4444;
+      --dsw-alias-state-business-primary: #3b82f6;
+
+      --dsw-alias-brand-primary: #3b82f6;
+      --dsw-alias-brand-text: #2563eb;
+
+      --dsw-alias-button-primary-fill: #2563eb;
+      --dsw-alias-button-primary-hover: #1d4ed8;
+      --dsw-alias-button-ghost-active-fill: rgba(37, 99, 235, 0.1);
+
+      --dsw-shadow-lv3: 0 16px 40px rgba(15, 23, 42, 0.14);
+      color-scheme: light;
+    }
+
+    [data-theme="dark"] {
+      --dsw-alias-label-primary: #f1f5f9;
+      --dsw-alias-label-secondary: #94a3b8;
+      --dsw-alias-label-tertiary: #64748b;
+      --dsw-alias-label-dimmed: #475569;
+      --dsw-alias-label-primary-foreground: #ffffff;
+
+      --dsw-alias-bg-base: #0b0f17;
+      --dsw-alias-bg-layer-1: #131924;
+      --dsw-alias-bg-layer-2: #1c2433;
+      --dsw-alias-bg-mask-2: rgba(0, 0, 0, 0.65);
+
+      --dsw-alias-border-l2: #243044;
+      --dsw-alias-border-l3: #334155;
+
+      --dsw-alias-interactive-bg-hover: rgba(255, 255, 255, 0.06);
+      --dsw-alias-interactive-bg-active: rgba(255, 255, 255, 0.1);
+      --dsw-alias-interactive-bg-hover-danger: rgba(239, 68, 68, 0.18);
+
+      --dsw-alias-state-success-primary: #34d399;
+      --dsw-alias-state-warn-primary: #fbbf24;
+      --dsw-alias-state-warn-label: #fcd34d;
+      --dsw-alias-state-error-primary: #f87171;
+      --dsw-alias-state-business-primary: #60a5fa;
+
+      --dsw-alias-brand-primary: #60a5fa;
+      --dsw-alias-brand-text: #93c5fd;
+
+      --dsw-alias-button-primary-fill: #3b82f6;
+      --dsw-alias-button-primary-hover: #2563eb;
+      --dsw-alias-button-ghost-active-fill: rgba(96, 165, 250, 0.16);
+
+      --dsw-shadow-lv3: 0 18px 48px rgba(0, 0, 0, 0.55);
+      color-scheme: dark;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      background: var(--dsw-alias-bg-base);
+      color: var(--dsw-alias-label-primary);
+      font-family: var(--dsw-font-family);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* When SearchModeButton is hosted in the topbar header, open its popover downward */
+    .kimi-wt-topbar .wt-sm-menu {
+      top: calc(100% + 6px) !important;
+      bottom: auto !important;
+      left: auto !important;
+      right: 0 !important;
+    }
+
+    .dswt-primitive-btn:hover:not(:disabled)[data-variant="primary"] {
+      background: var(--dsw-alias-button-primary-hover) !important;
+    }
+    .dswt-primitive-btn:hover:not(:disabled)[data-variant="outline"],
+    .dswt-primitive-btn:hover:not(:disabled)[data-variant="ghost"] {
+      background: var(--dsw-alias-interactive-bg-hover) !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

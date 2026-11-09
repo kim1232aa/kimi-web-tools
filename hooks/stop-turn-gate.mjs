@@ -1,4 +1,14 @@
 #!/usr/bin/env node
+/**
+ * kimi-web-tools — Stop Hook (`hooks/stop-turn-gate.mjs`).
+ *
+ * Enforces the `required` Search Mode turn policy:
+ * If the current turn has `required: true` (or effective mode is `required`)
+ * and neither `webSearchCompleted` nor `webFetchCompleted` is true, steers the
+ * model once (`correctionCount === 0` -> exit 2 with `REQUIRED_SEARCH_CORRECTION_TEXT`
+ * on stderr) so it calls `web_search` or `web_fetch` before finalizing.
+ * Never loops more than once per turn.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -45,6 +55,7 @@ async function readStdinJson() {
 async function main() {
   const payload = await readStdinJson();
 
+  // Do not gate subagents or re-entrant stop hooks
   if (payload.stop_hook_active) {
     process.exit(0);
   }

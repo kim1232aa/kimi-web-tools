@@ -1,19 +1,27 @@
 {
   "name": "kimi-web-tools",
   "version": "0.4.0",
-  "description": "Minimal 9Router web search and optional web fetch for Kimi Code",
+  "description": "Multi-provider web search, web fetch, social platform research (Xiaohongshu & X), per-session Search Mode policy, and standalone Web UI Dashboard for Kimi Code.",
   "keywords": [
     "web-search",
     "web-fetch",
-    "9router",
+    "exa",
+    "tavily",
+    "brave",
+    "firecrawl",
+    "jina",
+    "searxng",
+    "xiaohongshu",
+    "x",
     "mcp"
   ],
   "license": "MIT",
   "skills": "./skills/",
+  "commands": "./commands/",
   "systemPromptPath": "./SYSTEM.md",
   "mcpServers": {
     "web": {
-      "command": "/usr/bin/node",
+      "command": "node",
       "args": ["./bin/mcp-server.mjs"],
       "cwd": "./",
       "toolTimeoutMs": 120000
@@ -22,24 +30,24 @@
   "hooks": [
     {
       "event": "UserPromptSubmit",
-      "command": "/usr/bin/node ./hooks/user-prompt-submit.mjs",
+      "command": "node ./hooks/user-prompt-submit.mjs",
       "timeout": 10
     },
     {
       "event": "PreToolUse",
-      "matcher": "^(FetchURL|web_search|web_fetch|.*__(web_search|web_fetch|search_web|tavily_search))$",
-      "command": "/usr/bin/node ./hooks/pre-tool-gate.mjs",
+      "matcher": "^(web_search|web_fetch|mcp__(plugin-kimi-web-tools_)?web__(web_search|web_fetch))$",
+      "command": "node ./hooks/pre-tool-gate.mjs",
       "timeout": 10
     },
     {
       "event": "Stop",
-      "command": "/usr/bin/node ./hooks/stop-turn-gate.mjs",
+      "command": "node ./hooks/stop-turn-gate.mjs",
       "timeout": 10
     }
   ],
   "interface": {
     "displayName": "Kimi Web Tools",
-    "shortDescription": "Minimal 9Router web search and optional fetch gateway",
+    "shortDescription": "Multi-provider web search & fetch gateway with Search Mode and Web UI Dashboard",
     "developerName": "kimi-web-tools"
   }
 }

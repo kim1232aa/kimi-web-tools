@@ -1,0 +1,106 @@
+import { extractSearchHints } from "../search-hints.ts";
+import type { SpecializedPlatformId, SourceSearchOutcome, SourceFetchOutcome } from "./types.ts";
+import type { WebSearchProviderLike, WebFetchProviderLike } from "../registry.ts";
+
+export function buildFallbackQuery(query: string, platform: SpecializedPlatformId): string {
+  const hints = extractSearchHints(query);
+  const clean = hints.cleanQuery || query;
+
+  if (platform === "xiaohongshu") {
+    return `site:xiaohongshu.com ${clean}`;
+  }
+
+  if (platform === "x") {
+    return `(site:x.com OR site:twitter.com) ${clean}`;
+  }
+
+  return clean;
+}
+
+export async function fallbackSearchToGeneralWeb(
+  query: string,
+  platform: SpecializedPlatformId,
+  generalSearch?: WebSearchProviderLike,
+  maxResults?: number,
+  signal?: AbortSignal,
+): Promise<SourceSearchOutcome> {
+  if (!generalSearch) {
+    return {
+      items: [],
+      error: {
+        code: "runtime-unavailable",
+        message: `Platform source ${platform} is unavailable and no general search provider is configured`,
+        retryable: false,
+      },
+      retrievalMode: "degraded-web",
+    };
+  }
+
+  const fallbackQuery = buildFallbackQuery(query, platform);
+  try {
+    const rawResults = await generalSearch.search({ query: fallbackQuery, maxResults }, signal);
+    const items = (rawResults.sources || []).map((r, idx) => ({
+      id: r.url || String(idx),
+      title: r.title || r.url,
+      url: r.url,
+      snippet: r.snippet,
+      platform,
+    }));
+    return {
+      items,
+      retrievalMode: "degraded-web",
+    };
+  } catch (err: any) {
+    return {
+      items: [],
+      error: {
+        code: "network",
+        message: err?.message || "General web search fallback failed",
+        retryable: true,
+      },
+      retrievalMode: "degraded-web",
+    };
+  }
+}
+
+export async function fallbackFetchToGeneralWeb(
+  url: string,
+  generalFetch?: WebFetchProviderLike,
+  signal?: AbortSignal,
+): Promise<SourceFetchOutcome> {
+  if (!generalFetch) {
+    return {
+      error: {
+        code: "runtime-unavailable",
+        message: "Platform fetch failed and no general fetch provider is configured",
+        retryable: false,
+      },
+      retrievalMode: "degraded-web",
+    };
+  }
+
+  try {
+    const res = await generalFetch.fetch({ url }, signal);
+    return {
+      item: {
+        id: res.url || url,
+        title: res.metadata?.title || "Web Page",
+        url: res.url || url,
+        text: res.body?.content || "",
+        platform: "general",
+        author: res.metadata?.author ? { name: res.metadata.author } : undefined,
+        publishedAt: res.metadata?.publishedAt,
+      },
+      retrievalMode: "degraded-web",
+    };
+  } catch (err: any) {
+    return {
+      error: {
+        code: "network",
+        message: err?.message || "General web fetch fallback failed",
+        retryable: true,
+      },
+      retrievalMode: "degraded-web",
+    };
+  }
+}

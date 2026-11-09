@@ -1,4 +1,14 @@
 #!/usr/bin/env node
+/**
+ * kimi-web-tools — PreToolUse Hook (`hooks/pre-tool-gate.mjs`).
+ *
+ * 1. If the session's Search Mode is `off` (or the current turn was frozen as
+ *    `disabled`), blocks any `web_search` or `web_fetch` tool call by writing
+ *    `WEB_DISABLED_DENIAL` to stderr and exiting with status 2.
+ * 2. Otherwise, records the pending tool call and marks the session's turn
+ *    research flag (`webSearchCompleted` or `webFetchCompleted`) in
+ *    `$KIMI_CODE_HOME/web-tools/mode-state.json`, then exits 0.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -44,8 +54,20 @@ async function readStdinJson() {
 
 function classifyWebTool(toolName) {
   const name = String(toolName || "");
-  if (name === "web_search" || name.endsWith("__web_search") || name.endsWith("__search_web") || name.endsWith("__search")) return "web_search";
-  if (name === "web_fetch" || name.endsWith("__web_fetch") || name === "FetchURL" || name.endsWith("__fetch")) return "web_fetch";
+  if (
+    name === "web_search" ||
+    name === "mcp__web__web_search" ||
+    name === "mcp__plugin-kimi-web-tools_web__web_search"
+  ) {
+    return "web_search";
+  }
+  if (
+    name === "web_fetch" ||
+    name === "mcp__web__web_fetch" ||
+    name === "mcp__plugin-kimi-web-tools_web__web_fetch"
+  ) {
+    return "web_fetch";
+  }
   return null;
 }
 
@@ -78,6 +100,7 @@ async function main() {
     process.exit(2);
   }
 
+  // Record pending tool call & mark research attempt in mode-state.json
   const turn = sessionEntry.turn || {
     turn: 1,
     required: effectiveMode === "required",
